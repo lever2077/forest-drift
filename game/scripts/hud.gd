@@ -589,6 +589,8 @@ func _on_update_status(text: String, can_install: bool) -> void:
 	if updater.update_available():
 		update_btn.text = "Update to %s" % Updater.latest_tag
 		update_lbl.add_theme_color_override("font_color", Color(0.6, 1.0, 0.6))
+		if "--autoupdate" in OS.get_cmdline_user_args() and not updater.busy:
+			updater.install.call_deferred()   # dev aid: test the whole update flow
 	else:
 		update_btn.text = "Check for updates"
 		update_lbl.add_theme_color_override("font_color", Color(0.8, 0.85, 0.8))
