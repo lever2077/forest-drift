@@ -1,7 +1,9 @@
 # Builds the release zips, commits + pushes, and publishes GitHub release v<VERSION>.
 # Usage (from the project folder):  powershell -ExecutionPolicy Bypass -File tools\release.ps1
 param([string]$Notes = "")
-$ErrorActionPreference = "Stop"
+# "Continue": git/gh print progress on stderr, which PowerShell 5 would treat as fatal.
+# Failures are caught with $LASTEXITCODE / throw instead.
+$ErrorActionPreference = "Continue"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
@@ -12,8 +14,8 @@ $version = $Matches[1]
 $tag = "v$version"
 Write-Host "Releasing $tag"
 
-$existing = gh release view $tag --json tagName 2>$null
-if ($LASTEXITCODE -eq 0 -and $existing) { throw "Release $tag already exists - bump VERSION in game/scripts/updater.gd first" }
+$existing = gh release list --json tagName --jq ".[].tagName" | Where-Object { $_ -eq $tag }
+if ($existing) { throw "Release $tag already exists - bump VERSION in game/scripts/updater.gd first" }
 
 # zip entries need forward slashes (Compress-Archive in PowerShell 5 writes backslashes)
 function New-Zip([string]$zipPath, [array]$items) {
