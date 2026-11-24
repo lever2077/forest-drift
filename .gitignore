@@ -1,0 +1,6 @@
+# Godot's cache - rebuilt on launch
+game/.godot/
+# Godot binaries are over GitHub's 100 MB limit: they ship inside the release zip instead
+tools/godot/*.exe
+# release build output
+dist/
