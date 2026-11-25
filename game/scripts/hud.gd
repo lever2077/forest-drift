@@ -21,6 +21,7 @@ var dmg_lbl: Label
 var minimap: Control
 var msg_timer := 0.0
 var menu: PanelContainer
+var vr_mode := false   # drawn on a screen in VR (set before setup)
 signal start_pressed
 
 # ---------------------------------------------------------------- controls screen
@@ -61,7 +62,10 @@ const CONTROLS := {
 		["Handbrake", "Right grip  or  A"],
 		["Reset car onto the road", "B"],
 		["Restart from the start line", "X  (left controller)"],
-		["Recenter view", "Menu button / stick click"],
+		["Recenter view", "Y  /  stick click"],
+		["Back to the menu", "Menu button  (left controller)"],
+		["Click on the menu", "Point a controller, pull the trigger"],
+		["Scroll a list", "Thumbstick up / down"],
 	],
 	"Drifting tips": [
 		["Start a drift", "Turn in, then tap handbrake or stab throttle"],
@@ -1140,7 +1144,7 @@ func setup(p_car, p_track) -> void:
 	points_lbl.add_theme_color_override("font_color", Color(1.0, 0.85, 0.35))
 	points_lbl.visible = false
 	help_lbl = _mk_label(18, Vector2(24, 92))
-	help_lbl.text = "F1  Controls     F2  Settings"
+	help_lbl.text = "Menu button: back to the menu     Y: recenter" if vr_mode else "F1  Controls     F2  Settings"
 	# frame rate / frame time / ping readout
 	perf_lbl = _mk_label(17, Vector2(24, 120))
 	# car damage readout (only with Car damage on)
@@ -1176,7 +1180,12 @@ func show_loading() -> void:
 	l.grow_vertical = Control.GROW_DIRECTION_BOTH
 	add_child(l)
 
-func setup_menu_screen() -> void:
+func setup_menu_screen(with_blur := true) -> void:
+	if not with_blur:   # VR: the menu floats in the forest, no backdrop
+		build_controls()
+		_layout()
+		get_viewport().size_changed.connect(_layout)
+		return
 	var blur := ColorRect.new()
 	blur.set_anchors_preset(Control.PRESET_FULL_RECT)
 	blur.mouse_filter = Control.MOUSE_FILTER_IGNORE

@@ -14,6 +14,7 @@ const HillTrack = preload("res://scripts/hill_track.gd")
 const CircuitTrack = preload("res://scripts/circuit_track.gd")
 const Grass = preload("res://scripts/grass.gd")
 const Profile = preload("res://scripts/profile.gd")
+const VrPanel = preload("res://scripts/vr_panel.gd")
 # map index -> name (index order is what's saved; the menu shows them in MENU_ORDER)
 const MAPS := ["Greenwood Circuit", "Endless Road", "Switchback Ridge", "Compass Raceway"]
 const MAP_INFO := [
@@ -193,6 +194,8 @@ func _ready() -> void:
 		vr = true
 		get_viewport().use_xr = true
 		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	if "--vrsim" in OS.get_cmdline_user_args():
+		vr = true   # dev aid: the VR menu / HUD on the desktop window, no headset
 	_setup_environment()
 	# map (picked on the start menu, remembered)
 	var cfm := ConfigFile.new()
@@ -223,7 +226,7 @@ func _ready() -> void:
 	var test_mode := shot_dir != "" or "--drivetest" in args or "--bottest" in args or "--edgetest" in args
 	# start screen: a fresh launch (or Esc while driving) shows the blurred forest
 	# and the map list; picking a map rebuilds the scene straight into that map
-	if not vr and not test_mode and not auto_start:
+	if not test_mode and not auto_start:
 		_build_start_screen(args)
 		return
 	auto_start = false
@@ -272,6 +275,25 @@ func _ready() -> void:
 	if vr:
 		_setup_vr()
 		car.assist = 0.35
+		# the normal HUD (speed, score, points, lap, minimap) on a see-through
+		# screen floating above the dashboard
+		vr_hud_panel = VrPanel.new()
+		vr_hud_panel.name = "VRHud"
+		xr_origin.add_child(vr_hud_panel)
+		vr_hud_panel.setup(Vector2i(900, 506), 1.3, true, false, true)
+		vr_hud_panel.position = Vector3(0.0, 0.2, -1.2)
+		vr_hud_panel.rotation.x = deg_to_rad(6.0)
+		hud = Hud.new()
+		hud.vr_mode = true
+		vr_hud_panel.add_ui(hud)
+		hud.setup(car, track)
+		hud.build_settings(envc, self)
+		for a in args:   # dev aid (with --vrsim): --menushot= also pictures the VR cockpit after a map loads
+			if a.begins_with("--menushot="):
+				get_tree().create_timer(4.0).timeout.connect(func():
+					await RenderingServer.frame_post_draw
+					get_viewport().get_texture().get_image().save_png(a.substr(11).replace(".png", "_drive.png"))
+					get_tree().quit())
 	else:
 		cam = CameraRig.new()
 		add_child(cam)
@@ -378,15 +400,28 @@ func _build_start_screen(args: Array) -> void:
 	add_child(mountains)
 	mountains.build(env, envc)
 	_build_menu_forest()
-	menu_cam = Camera3D.new()
-	menu_cam.fov = 62.0
-	menu_cam.far = 2500.0
-	menu_cam.position = Vector3(0, 1.8, 0)
-	add_child(menu_cam)
-	menu_cam.current = true
 	hud = Hud.new()
-	add_child(hud)
-	hud.setup_menu_screen()
+	if vr:
+		# standing in the forest with the menu on a big screen in front of you;
+		# point a controller at it and pull the trigger to click
+		_make_xr_rig(self, Vector3(0, 1.6, 0), true)
+		vr_menu_panel = VrPanel.new()
+		vr_menu_panel.name = "VRMenu"
+		add_child(vr_menu_panel)
+		vr_menu_panel.setup(Vector2i(1000, 880), 1.5, true)
+		vr_menu_panel.position = Vector3(0, 1.5, -1.15)
+		hud.vr_mode = true
+		vr_menu_panel.add_ui(hud)
+		hud.setup_menu_screen(false)
+	else:
+		menu_cam = Camera3D.new()
+		menu_cam.fov = 62.0
+		menu_cam.far = 2500.0
+		menu_cam.position = Vector3(0, 1.8, 0)
+		add_child(menu_cam)
+		menu_cam.current = true
+		add_child(hud)
+		hud.setup_menu_screen()
 	hud.build_settings(envc, self)
 	var entries := []
 	for i in MENU_ORDER:
@@ -410,6 +445,32 @@ func _build_start_screen(args: Array) -> void:
 				"audio":
 					hud.toggle_settings()
 					hud.settings_tabs.current_tab = hud.settings_tabs.get_tab_count() - 1
+	for a in args:   # dev aid (with --vrsim): --vrclick=Caches aims a laser at that button and clicks it
+		if a.begins_with("--vrclick=") and vr_menu_panel:
+			vr_scripted = true   # the real controllers would fight the scripted laser
+			await get_tree().create_timer(1.5).timeout
+			for label in a.substr(10).split(","):
+				var btn: Button = _find_button(hud, label.replace("_", " "))
+				if btn == null:
+					print("VRCLICK no button '%s'" % label)
+					continue
+				var c: Vector2 = btn.get_global_rect().get_center()
+				var uv := c / Vector2(vr_menu_panel.px)
+				var local := Vector3((uv.x - 0.5) * vr_menu_panel.size_m.x, (0.5 - uv.y) * vr_menu_panel.size_m.y, 0)
+				var target: Vector3 = vr_menu_panel.global_transform * local
+				var o: Vector3 = xr_right.global_position + Vector3(0.2, -0.3, 0)
+				var h: Dictionary = vr_menu_panel.hit(o, (target - o).normalized())
+				print("VRCLICK '%s' at %s -> hit %s" % [label, str(c), str(h.get("pos", "MISS"))])
+				btn.button_down.connect(func(): print("VRCLICK   button_down"))
+				btn.pressed.connect(func(): print("VRCLICK   pressed"))
+				btn.mouse_entered.connect(func(): print("VRCLICK   hover"))
+				if not h.is_empty():
+					vr_menu_panel.point(h, false)
+					await get_tree().process_frame
+					vr_menu_panel.point(h, true)
+					await get_tree().process_frame
+					vr_menu_panel.point(h, false)
+				await get_tree().create_timer(0.6).timeout
 	for a in args:   # dev aid: --menushot=file.png saves a picture of the start screen
 		if a.begins_with("--menushot="):
 			await get_tree().create_timer(3.0).timeout
@@ -418,6 +479,15 @@ func _build_start_screen(args: Array) -> void:
 			get_tree().quit()
 	if "--menutest" in args:
 		_menu_test_step()
+
+func _find_button(n: Node, text: String) -> Button:
+	if n is Button and (n as Button).is_visible_in_tree() and (n as Button).text.begins_with(text):
+		return n
+	for c in n.get_children():
+		var b := _find_button(c, text)
+		if b:
+			return b
+	return null
 
 # a small patch of forest around the camera for the blurred backdrop
 func _build_menu_forest() -> void:
@@ -1146,6 +1216,9 @@ func _physics_process(_delta: float) -> void:
 		prof_stream_ms = (Time.get_ticks_usec() - ts) / 1000.0
 
 func _process(_delta: float) -> void:
+	if vr_menu_panel:
+		_vr_menu_tick(_delta)
+		return
 	# start screen: slowly look around the forest behind the blur
 	if menu_cam:
 		menu_cam.rotation.y += _delta * 0.05
@@ -1188,10 +1261,17 @@ func _process(_delta: float) -> void:
 	car.in_analog = analog
 
 # ---------------------------------------------------------------- VR
-func _setup_vr() -> void:
+var vr_menu_panel     # the start menu screen (VR only)
+var vr_hud_panel      # the driving HUD above the dash (VR only)
+var xr_lasers := {}   # controller -> laser mesh (menu only)
+var vr_pointer        # the controller that clicks the menu (the last one whose trigger was pulled)
+
+# headset camera + both controllers under `parent`; with `lasers` each controller
+# gets a pointer beam for the menu
+func _make_xr_rig(parent: Node3D, pos: Vector3, lasers: bool) -> void:
 	xr_origin = XROrigin3D.new()
-	xr_origin.position = Vector3(-0.37, 1.07, 0.36)
-	car.model.body.add_child(xr_origin)
+	xr_origin.position = pos
+	parent.add_child(xr_origin)
 	var xc := XRCamera3D.new()
 	xc.near = 0.03
 	xc.far = 2500.0
@@ -1204,33 +1284,99 @@ func _setup_vr() -> void:
 	xr_right.tracker = "right_hand"
 	xr_origin.add_child(xr_right)
 	for c in [xr_left, xr_right]:
+		var xcon: XRController3D = c
+		xcon.pose = "aim" if lasers else "default"
 		var m := MeshInstance3D.new()
 		var bm := BoxMesh.new()
-		bm.size = Vector3(0.06, 0.04, 0.14)
+		bm.size = Vector3(0.04, 0.03, 0.12)
 		m.mesh = bm
-		(c as XRController3D).add_child(m)
-	xr_right.button_pressed.connect(_on_xr_button)
-	xr_left.button_pressed.connect(_on_xr_button)
+		xcon.add_child(m)
+		if lasers:
+			var beam := MeshInstance3D.new()
+			var lm := BoxMesh.new()
+			lm.size = Vector3(0.003, 0.003, 1.0)
+			beam.mesh = lm
+			var bmat := StandardMaterial3D.new()
+			bmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			bmat.albedo_color = Color(1.0, 0.6, 0.2, 0.7)
+			bmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			beam.material_override = bmat
+			beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			xcon.add_child(beam)
+			xr_lasers[xcon] = beam
+	vr_pointer = xr_right
+	xr_right.button_pressed.connect(_on_xr_button.bind(false))
+	xr_left.button_pressed.connect(_on_xr_button.bind(true))
+	get_tree().create_timer(1.0).timeout.connect(func(): XRServer.center_on_hmd(XRServer.RESET_BUT_KEEP_TILT, true))
+
+# VR start menu: aim the lasers at the screen, trigger clicks, stick scrolls
+var vr_scripted := false
+
+func _vr_menu_tick(delta: float) -> void:
+	if vr_menu_panel == null or vr_scripted:
+		return
+	for c in xr_lasers.keys():
+		var xcon: XRController3D = c
+		if xcon.get_float("trigger") > 0.6 and xcon != vr_pointer:
+			if vr_pointer:
+				vr_menu_panel.leave()
+			vr_pointer = xcon
+	for c in xr_lasers.keys():
+		var xcon: XRController3D = c
+		var beam: MeshInstance3D = xr_lasers[c]
+		var o := xcon.global_position
+		var d := -xcon.global_transform.basis.z.normalized()
+		var h: Dictionary = vr_menu_panel.hit(o, d)
+		var length := 3.0
+		if not h.is_empty():
+			length = h["dist"]
+		beam.scale = Vector3(1, 1, length)
+		beam.position = Vector3(0, 0, -length * 0.5)
+		beam.visible = xcon == vr_pointer
+		if xcon != vr_pointer:
+			continue
+		if h.is_empty():
+			vr_menu_panel.leave()
+		else:
+			vr_menu_panel.point(h, xcon.get_float("trigger") > 0.6)
+			var sy := xcon.get_vector2("primary").y
+			if absf(sy) > 0.3:
+				vr_scroll_t -= delta
+				if vr_scroll_t <= 0.0:
+					vr_menu_panel.scroll(signf(sy))
+					vr_scroll_t = 0.12
+			else:
+				vr_scroll_t = 0.0
+
+var vr_scroll_t := 0.0
+
+func _setup_vr() -> void:
+	_make_xr_rig(car.model.body, Vector3(-0.37, 1.07, 0.36), false)
 	# floating info panel above the dash
 	var info := Label3D.new()
 	info.name = "VRInfo"
-	info.text = "R trigger: throttle   L trigger: brake   L stick: steer\nR grip / A: handbrake   B: reset car   X: restart from the start line"
+	info.text = "R trigger: throttle   L trigger: brake   L stick: steer   R grip / A: handbrake\nB: reset car   X: restart   Y: recenter view   Menu button: back to the menu"
 	info.font_size = 32
 	info.pixel_size = 0.0012
-	info.position = Vector3(0, 1.25, -0.9)
+	info.position = Vector3(-0.37, 1.85, -0.9)
 	info.modulate = Color(1, 1, 1, 0.8)
 	car.model.body.add_child(info)
 	get_tree().create_timer(10.0).timeout.connect(func(): info.visible = false)
-	get_tree().create_timer(1.0).timeout.connect(func(): XRServer.center_on_hmd(XRServer.RESET_BUT_KEEP_TILT, true))
 
-func _on_xr_button(name: String) -> void:
-	if name == "ax_button" and xr_left and xr_left.is_button_pressed("ax_button"):
-		_restart()   # X on the left controller: back to the start line
-	elif name == "by_button":
-		# B (right) resets the car, Y (left) recenters the view
-		car.reset_on_track()
-	elif name == "menu_button" or name == "primary_click":
-		XRServer.center_on_hmd(XRServer.RESET_BUT_KEEP_TILT, true)
+func _on_xr_button(name: String, left: bool) -> void:
+	if car == null:
+		# start menu: Y / stick click / menu recenter the view (the trigger clicks)
+		if name in ["by_button", "primary_click", "menu_button"]:
+			XRServer.center_on_hmd(XRServer.RESET_BUT_KEEP_TILT, true)
+		return
+	if name == "menu_button":
+		_back_to_menu()          # menu button: back to the start menu
+	elif name == "ax_button" and left:
+		_restart()               # X: back to the start line
+	elif name == "by_button" and not left:
+		car.reset_on_track()     # B: put the car back on the road
+	elif (name == "by_button" and left) or name == "primary_click":
+		XRServer.center_on_hmd(XRServer.RESET_BUT_KEEP_TILT, true)   # Y / stick click: recenter
 
 # ---------------------------------------------------------------- screenshots (dev aid)
 func _run_screenshots() -> void:

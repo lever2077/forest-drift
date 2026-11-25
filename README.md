@@ -234,8 +234,15 @@ Drifting tips tabs.
 
 ### VR
 Plug in your headset with SteamVR (or Quest Link / Air Link) running, with SteamVR set as the
-OpenXR runtime, then launch the game. It switches to VR automatically and puts you in the driver's
-seat. Without a headset it runs on the desktop as usual.
+OpenXR runtime, then launch the game. It detects the headset and starts in VR automatically (no
+setting needed); without a headset it runs on the desktop as usual.
+
+In VR you start standing in the forest in front of the full menu on a floating screen: maps, biome,
+Settings, Caches, Inventory and updates. Point either controller at it (an orange laser) and pull the
+trigger to click; the thumbstick scrolls. Picking a map puts you in the driver's seat with the HUD
+(speed, score, points, lap, minimap) floating above the dash. The menu button takes you back to the menu.
+(`vr_panel.gd` draws the normal 2D menu into a SubViewport on a quad and turns the laser into mouse
+events. Dev aid: `--vrsim` runs the VR menu on the desktop and `--vrclick=Caches,Close` clicks through it.)
 
 | VR control | Action |
 |---|---|
@@ -245,7 +252,10 @@ seat. Without a headset it runs on the desktop as usual.
 | Right grip or A | Handbrake |
 | B | Reset car onto the road |
 | X (left) | Restart from the start line |
-| Menu / stick click | Recenter view |
+| Y / stick click | Recenter view |
+| Menu button (left) | Back to the menu |
+| Trigger (on the menu) | Click where the laser points |
+| Thumbstick up/down (on the menu) | Scroll |
 
 ### Keyboard / gamepad
 | Key | Pad | Action |
