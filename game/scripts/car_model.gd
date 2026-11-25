@@ -416,9 +416,100 @@ func build() -> void:
 	mi.name = "Shell"
 	body.add_child(mi)
 	_build_steering_wheel()
+	_build_mirrors()
 	_build_labels()
 	_build_wheels()
 	_build_lamps()
+
+# ---------------------------------------------------------------- mirrors
+# Real mirrors: each glass shows what a small camera at the mirror sees looking
+# back (flipped left-right like a mirror). They only render while you're in the
+# driver's seat (cockpit view or VR) because each one draws the world again.
+const MIRROR_EYE := Vector3(-0.37, 1.07, 0.36)   # driver's eyes (body local)
+var mirrors: Array = []    # {"vp": SubViewport, "cam": Camera3D, "xf": Transform3D (body local)}
+var mirrors_on := false
+
+func _build_mirrors() -> void:
+	# side mirrors: glass on the back of each housing (same spot as _build_details)
+	for side in [1.0, -1.0]:
+		var p := body_raw(0.50, BELT_TH)
+		var housing := L(Vector3(p.x * side, p.y, p.z)) + Vector3(0.10 * side, 0.08, 0.02)
+		var glass := housing + Vector3(-0.022 * side, 0, 0.072)   # over the chrome back of the housing
+		# looking back along the car's flank, a little outwards
+		var view := Vector3(0.14 * side, -0.03, 1.0).normalized()
+		_add_mirror(glass, view, Vector2(0.14, 0.07), Vector2i(360, 180), 17.0)
+	# rear-view mirror hanging from the top of the windscreen
+	var rv := L(Vector3(0.0, 1.165, -0.08))
+	var stem := MeshInstance3D.new()
+	var sm := CylinderMesh.new()
+	sm.top_radius = 0.008
+	sm.bottom_radius = 0.008
+	sm.height = 0.07
+	stem.mesh = sm
+	stem.material_override = mats["interior"]
+	stem.position = rv + Vector3(0, 0.05, -0.015)
+	body.add_child(stem)
+	_add_mirror(rv, Vector3(0.0, -0.04, 1.0).normalized(), Vector2(0.25, 0.065), Vector2i(560, 146), 11.0, true)
+
+func _add_mirror(pos: Vector3, view: Vector3, glass_size: Vector2, res: Vector2i, fov_deg: float, framed := false) -> void:
+	# the glass faces halfway between the driver's eyes and the view behind
+	var to_eye := (MIRROR_EYE - pos).normalized()
+	var n := (to_eye + view).normalized()
+	var gz := n
+	var gx := Vector3.UP.cross(gz).normalized()
+	var gy := gz.cross(gx)
+	var gb := Basis(gx, gy, gz)
+	var vp := SubViewport.new()
+	vp.size = res
+	vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+	vp.msaa_3d = Viewport.MSAA_DISABLED
+	vp.positional_shadow_atlas_size = 0
+	body.add_child(vp)
+	var cam := Camera3D.new()
+	cam.fov = fov_deg
+	cam.near = 0.08
+	cam.far = 400.0
+	vp.add_child(cam)
+	cam.current = true
+	var cz := -view            # a camera looks along its -Z
+	var cx := Vector3.UP.cross(cz).normalized()
+	var cy := cz.cross(cx)
+	var xf := Transform3D(Basis(cx, cy, cz), pos + n * 0.01)
+	var glass := MeshInstance3D.new()
+	var qm := QuadMesh.new()
+	qm.size = glass_size
+	glass.mesh = qm
+	var gm := StandardMaterial3D.new()
+	gm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	gm.albedo_texture = vp.get_texture()
+	gm.uv1_scale = Vector3(-1, 1, 1)    # mirrored left-right
+	gm.uv1_offset = Vector3(1, 0, 0)
+	glass.material_override = gm
+	glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	glass.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	glass.transform = Transform3D(gb, pos + n * 0.002)
+	body.add_child(glass)
+	if framed:
+		var frame := MeshInstance3D.new()
+		var fm := BoxMesh.new()
+		fm.size = Vector3(glass_size.x + 0.02, glass_size.y + 0.02, 0.025)
+		frame.mesh = fm
+		frame.material_override = mats["interior"]
+		frame.transform = Transform3D(gb, pos - n * 0.013)
+		body.add_child(frame)
+	mirrors.append({"vp": vp, "cam": cam, "xf": xf})
+	_place_mirror_cam(mirrors[-1])
+
+func _place_mirror_cam(m: Dictionary) -> void:
+	if body.is_inside_tree():
+		(m["cam"] as Camera3D).global_transform = body.global_transform * (m["xf"] as Transform3D)
+
+# render the mirrors every frame (driver's seat) or freeze them (outside views)
+func set_mirrors_active(on: bool) -> void:
+	mirrors_on = on
+	for m in mirrors:
+		_place_mirror_cam(m)
+		(m["vp"] as SubViewport).render_target_update_mode = SubViewport.UPDATE_ALWAYS if on else SubViewport.UPDATE_ONCE
 
 func _grid_normals(grid: Array, nu: int, nv: int, closed_v: bool) -> Array:
 	var norms := []
@@ -1441,3 +1532,6 @@ func update_visuals(steer: float, wheel_spin_f: float, wheel_spin_r: float, roll
 	if steering_wheel:
 		steering_wheel.rotation.z = steer * 12.0 * 0.5
 	body.rotation = Vector3(pitch, 0, roll)
+	if mirrors_on:
+		for m in mirrors:
+			_place_mirror_cam(m)

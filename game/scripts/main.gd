@@ -223,7 +223,7 @@ func _ready() -> void:
 		if a.begins_with("--biome="):
 			biome_name = a.substr(8).replace("_", " ")
 	var args := OS.get_cmdline_user_args()
-	var test_mode := shot_dir != "" or "--drivetest" in args or "--bottest" in args or "--edgetest" in args
+	var test_mode := shot_dir != "" or "--drivetest" in args or "--bottest" in args or "--edgetest" in args or "--vrgrabtest" in args
 	# start screen: a fresh launch (or Esc while driving) shows the blurred forest
 	# and the map list; picking a map rebuilds the scene straight into that map
 	if not test_mode and not auto_start:
@@ -279,9 +279,9 @@ func _ready() -> void:
 		# screen floating above the dashboard
 		vr_hud_panel = VrPanel.new()
 		vr_hud_panel.name = "VRHud"
-		xr_origin.add_child(vr_hud_panel)
+		car.model.body.add_child(vr_hud_panel)
 		vr_hud_panel.setup(Vector2i(900, 506), 1.3, true, false, true)
-		vr_hud_panel.position = Vector3(0.0, 0.2, -1.2)
+		vr_hud_panel.position = xr_eye + Vector3(0.0, 0.2, -1.2)
 		vr_hud_panel.rotation.x = deg_to_rad(6.0)
 		hud = Hud.new()
 		hud.vr_mode = true
@@ -1218,6 +1218,7 @@ func _physics_process(_delta: float) -> void:
 func _process(_delta: float) -> void:
 	if vr_menu_panel:
 		_vr_menu_tick(_delta)
+		_vr_hands_tick()
 		return
 	# start screen: slowly look around the forest behind the blur
 	if menu_cam:
@@ -1246,13 +1247,14 @@ func _process(_delta: float) -> void:
 	if Input.get_connected_joypads().size() > 0 and abs(Input.get_joy_axis(0, JOY_AXIS_LEFT_X)) > 0.12:
 		analog = true
 	if vr and xr_left and xr_right:
+		_vr_hands_tick()   # grip on the steering wheel steers (sets car.wheel_hold)
 		thr = max(thr, xr_right.get_float("trigger"))
 		brk = max(brk, xr_left.get_float("trigger"))
 		var stick := xr_left.get_vector2("primary")
 		if abs(stick.x) > 0.1:
 			st = stick.x
 			analog = true
-		if xr_right.get_float("grip") > 0.5 or xr_right.is_button_pressed("ax_button"):
+		if xr_right.is_button_pressed("ax_button"):
 			hb = 1.0
 	car.in_throttle = thr
 	car.in_brake = brk
@@ -1268,29 +1270,42 @@ var vr_pointer        # the controller that clicks the menu (the last one whose 
 
 # headset camera + both controllers under `parent`; with `lasers` each controller
 # gets a pointer beam for the menu
-func _make_xr_rig(parent: Node3D, pos: Vector3, lasers: bool) -> void:
+var xr_cam: XRCamera3D
+var xr_eye := Vector3.ZERO      # where the eyes should be, in xr_origin's parent space
+var hands := {}                 # controller -> vr_hand.gd
+var grabs := {}                 # controller -> {"last", "acc", "w0", "rim"} while holding the wheel
+var grip_was := {}              # controller -> grip held last frame (a grab needs a fresh squeeze)
+const WHEEL_RATIO := 6.0        # steering wheel turns 6x the front wheels (matches car_model)
+const RIM_R := 0.18             # steering wheel rim radius (car_model)
+const VrHand = preload("res://scripts/vr_hand.gd")
+
+# headset camera + both controllers under `parent`, with the eyes at `eye`;
+# with `lasers` each controller gets a pointer beam for the menu
+func _make_xr_rig(parent: Node3D, eye: Vector3, lasers: bool) -> void:
+	xr_eye = eye
 	xr_origin = XROrigin3D.new()
-	xr_origin.position = pos
+	xr_origin.position = eye
 	parent.add_child(xr_origin)
-	var xc := XRCamera3D.new()
-	xc.near = 0.03
-	xc.far = 2500.0
-	xr_origin.add_child(xc)
-	xc.current = true
+	xr_cam = XRCamera3D.new()
+	xr_cam.near = 0.03
+	xr_cam.far = 2500.0
+	xr_origin.add_child(xr_cam)
+	xr_cam.current = true
 	xr_left = XRController3D.new()
 	xr_left.tracker = "left_hand"
 	xr_origin.add_child(xr_left)
 	xr_right = XRController3D.new()
 	xr_right.tracker = "right_hand"
 	xr_origin.add_child(xr_right)
+	hands.clear()
+	grabs.clear()
 	for c in [xr_left, xr_right]:
 		var xcon: XRController3D = c
 		xcon.pose = "aim" if lasers else "default"
-		var m := MeshInstance3D.new()
-		var bm := BoxMesh.new()
-		bm.size = Vector3(0.04, 0.03, 0.12)
-		m.mesh = bm
-		xcon.add_child(m)
+		var hand := VrHand.new()
+		xcon.add_child(hand)
+		hand.build(xcon == xr_left)
+		hands[xcon] = hand
 		if lasers:
 			var beam := MeshInstance3D.new()
 			var lm := BoxMesh.new()
@@ -1307,7 +1322,79 @@ func _make_xr_rig(parent: Node3D, pos: Vector3, lasers: bool) -> void:
 	vr_pointer = xr_right
 	xr_right.button_pressed.connect(_on_xr_button.bind(false))
 	xr_left.button_pressed.connect(_on_xr_button.bind(true))
-	get_tree().create_timer(1.0).timeout.connect(func(): XRServer.center_on_hmd(XRServer.RESET_BUT_KEEP_TILT, true))
+	# put the eyes in the seat once tracking has started (and again a bit later
+	# in case the headset was still waking up)
+	get_tree().create_timer(0.6).timeout.connect(_vr_recenter)
+	get_tree().create_timer(2.0).timeout.connect(_vr_recenter)
+
+# Recenter: face forward and move the tracking space so the headset is exactly
+# at xr_eye. SteamVR reports your real head height above the floor, which used
+# to stack on top of the seat height and put you above the car.
+func _vr_recenter() -> void:
+	if xr_origin == null or not is_instance_valid(xr_origin):
+		return
+	XRServer.center_on_hmd(XRServer.RESET_BUT_KEEP_TILT, false)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if xr_origin == null or not is_instance_valid(xr_origin):
+		return
+	# whatever offset is left (runtimes differ), cancel it out
+	xr_origin.position = xr_eye - xr_cam.position
+
+# hands each frame: follow the controllers, or hold the steering wheel rim
+func _vr_hands_tick() -> void:
+	if hands.is_empty():
+		return
+	var pivot: Node3D = null
+	if car and car.model.steering_wheel:
+		pivot = car.model.steering_wheel.get_parent()
+	var wheel_now: float = car.steer * WHEEL_RATIO if car else 0.0
+	var targets := []
+	for c in hands.keys():
+		var xcon: XRController3D = c
+		var hand = hands[c]
+		var grip: float = sim_grip.get(xcon, xcon.get_float("grip"))
+		var trig := xcon.get_float("trigger")
+		var fresh: bool = grip > 0.6 and not grip_was.get(xcon, false)
+		grip_was[xcon] = grip > 0.6
+		if pivot:
+			var p := pivot.global_transform.affine_inverse() * xcon.global_position
+			var ang := atan2(p.y, p.x)
+			if grabs.has(xcon) and grip < 0.35:
+				grabs.erase(xcon)
+			elif not grabs.has(xcon) and fresh:
+				# close enough to the rim to take hold of it?
+				var r := Vector2(p.x, p.y).length()
+				if Vector2(r - RIM_R, p.z).length() < 0.14:
+					grabs[xcon] = {"last": ang, "acc": 0.0, "w0": wheel_now, "rim": ang - wheel_now}
+			if grabs.has(xcon):
+				var g: Dictionary = grabs[xcon]
+				g["acc"] += wrapf(ang - g["last"], -PI, PI)   # follows the hand past 180 degrees
+				g["last"] = ang
+				targets.append(g["w0"] + g["acc"])
+				# the hand stays on the rim where it grabbed, turning with the wheel
+				var a: float = g["rim"] + wheel_now
+				var radial := Vector3(cos(a), sin(a), 0)
+				var tangent := Vector3(-sin(a), cos(a), 0)
+				# fist around the rim: knuckles along the rim, thumb towards the top
+				# of the wheel, wrist coming back towards you and slightly outwards
+				var hx := -tangent
+				var hz := (Vector3(0, 0, 1) + radial * 0.2).normalized()
+				var hy := hz.cross(hx)
+				var hb := Basis(hx, hy, hz)
+				var rim_pt := radial * RIM_R
+				hand.global_transform = pivot.global_transform * Transform3D(hb, rim_pt + hy * 0.028 + hz * 0.035)
+				hand.set_curl(1.0)
+				continue
+		hand.global_transform = xcon.global_transform * Transform3D(Basis(), Vector3(0, 0.01, 0.03))
+		hand.set_curl(grip, trig)
+	if car:
+		car.wheel_hold = not targets.is_empty()
+		if car.wheel_hold:
+			var sum := 0.0
+			for t in targets:
+				sum += t
+			car.wheel_target = sum / targets.size() / WHEEL_RATIO
 
 # VR start menu: aim the lasers at the screen, trigger clicks, stick scrolls
 var vr_scripted := false
@@ -1350,12 +1437,45 @@ func _vr_menu_tick(delta: float) -> void:
 
 var vr_scroll_t := 0.0
 
+var sim_grip := {}   # dev aid: controller -> fake grip value (no headset)
+
 func _setup_vr() -> void:
 	_make_xr_rig(car.model.body, Vector3(-0.37, 1.07, 0.36), false)
+	car.model.set_mirrors_active.call_deferred(true)
+	if "--vrgrabtest" in OS.get_cmdline_user_args():
+		_vr_grab_test()
+
+# dev aid (with --vrsim): both hands take the wheel at 9 and 3 o'clock, turn it
+# a quarter turn left, then let go; prints what the car's front wheels did
+func _vr_grab_test() -> void:
+	await get_tree().create_timer(1.5).timeout
+	var pivot: Node3D = car.model.steering_wheel.get_parent()
+	var place := func(turn: float):
+		for c in [xr_left, xr_right]:
+			var a: float = (PI if c == xr_left else 0.0) + turn
+			(c as Node3D).global_position = pivot.global_transform * Vector3(cos(a) * RIM_R, sin(a) * RIM_R, 0.02)
+	place.call(0.0)
+	await get_tree().process_frame
+	sim_grip = {xr_left: 1.0, xr_right: 1.0}
+	await get_tree().process_frame
+	print("GRAB holding=%s grabs=%d" % [car.wheel_hold, grabs.size()])
+	for i in 30:
+		place.call(PI / 2 * (i + 1) / 30.0)
+		await get_tree().process_frame
+	await get_tree().create_timer(0.5).timeout
+	print("GRAB after a quarter turn left: wheel_target %.3f rad, front wheels %.3f rad, steering wheel %.0f deg" % [car.wheel_target, car.steer, rad_to_deg(car.model.steering_wheel.rotation.z)])
+	await RenderingServer.frame_post_draw
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--grabshot="):
+			get_viewport().get_texture().get_image().save_png(a.substr(11))
+	sim_grip = {xr_left: 0.0, xr_right: 0.0}
+	await get_tree().create_timer(0.3).timeout
+	print("GRAB released: holding=%s" % car.wheel_hold)
+	get_tree().quit()
 	# floating info panel above the dash
 	var info := Label3D.new()
 	info.name = "VRInfo"
-	info.text = "R trigger: throttle   L trigger: brake   L stick: steer   R grip / A: handbrake\nB: reset car   X: restart   Y: recenter view   Menu button: back to the menu"
+	info.text = "Grip on the wheel: grab and steer (or L stick)   R trigger: throttle   L trigger: brake   A: handbrake\nB: reset car   X: restart   Y: recenter view   Menu button: back to the menu"
 	info.font_size = 32
 	info.pixel_size = 0.0012
 	info.position = Vector3(-0.37, 1.85, -0.9)
@@ -1367,7 +1487,7 @@ func _on_xr_button(name: String, left: bool) -> void:
 	if car == null:
 		# start menu: Y / stick click / menu recenter the view (the trigger clicks)
 		if name in ["by_button", "primary_click", "menu_button"]:
-			XRServer.center_on_hmd(XRServer.RESET_BUT_KEEP_TILT, true)
+			_vr_recenter()
 		return
 	if name == "menu_button":
 		_back_to_menu()          # menu button: back to the start menu
@@ -1376,11 +1496,12 @@ func _on_xr_button(name: String, left: bool) -> void:
 	elif name == "by_button" and not left:
 		car.reset_on_track()     # B: put the car back on the road
 	elif (name == "by_button" and left) or name == "primary_click":
-		XRServer.center_on_hmd(XRServer.RESET_BUT_KEEP_TILT, true)   # Y / stick click: recenter
+		_vr_recenter()   # Y / stick click: recenter
 
 # ---------------------------------------------------------------- screenshots (dev aid)
 func _run_screenshots() -> void:
 	set_process(false)
+	car.model.set_mirrors_active(true)
 	await get_tree().create_timer(2.5).timeout
 	var shots := [
 		["chase", 0],

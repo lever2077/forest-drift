@@ -18,11 +18,13 @@ func setup(p_car) -> void:
 	fov = 70.0
 	smooth_dir = -car.global_transform.basis.z
 	global_position = car.global_position + Vector3(0, 2.5, 7)
+	car.model.set_mirrors_active.call_deferred(mode == 2)
 
 func cycle() -> void:
 	mode = (mode + 1) % 3
 	orbit = 0.0
 	orbit_pitch = 0.0
+	car.model.set_mirrors_active(mode == 2)   # the mirrors only draw from the driver's seat
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:

@@ -140,6 +140,8 @@ var in_brake := 0.0
 var in_steer := 0.0        # -1 left .. +1 right
 var in_handbrake := 0.0
 var in_analog := false
+var wheel_hold := false     # VR: a hand is on the steering wheel
+var wheel_target := 0.0     # VR: front-wheel angle the steering wheel asks for (rad, + = left)
 var assist := 0.6          # countersteer assist (0..1)
 
 # --- scoring
@@ -830,18 +832,26 @@ func _step(dt: float) -> void:
 	# ---- steering
 	var target: float
 	var max_st: float = min(MAX_STEER * steer_k, 1.05) * (1.0 - 0.55 * steer_broken)
-	if in_analog:
+	if wheel_hold:
+		# VR hands on the steering wheel: the front wheels follow it directly
+		# (no speed limit, no countersteer assist - you're doing the steering)
+		target = clampf(wheel_target, -max_st, max_st)
+	elif in_analog:
 		target = -in_steer * max_st
 	else:
 		var lim := lerpf(max_st, 0.32 * steer_k, clampf(speed / 55.0, 0.0, 1.0))
 		target = -in_steer * lim
-	if vlong > 2.0:
+	if wheel_hold:
+		pass
+	elif vlong > 2.0:
 		# countersteer assist: front wheels drift towards the direction of travel
 		var vlat_f := vlat - yaw_rate * A
 		var align := -atan2(vlat_f, vlong)
 		var k := assist * clampf((speed - 2.0) / 6.0, 0.0, 1.0)
 		target = clampf(target + align * k, -max_st, max_st)
 	var srate := (9.0 if in_analog else 4.0) * lerpf(0.8, 1.3, clampf(steer_k - 0.6, 0.0, 1.0))
+	if wheel_hold:
+		srate = 16.0
 	steer = move_toward(steer, target + steer_bias, srate * dt)
 
 	# ---- surface

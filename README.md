@@ -241,6 +241,14 @@ In VR you start standing in the forest in front of the full menu on a floating s
 Settings, Caches, Inventory and updates. Point either controller at it (an orange laser) and pull the
 trigger to click; the thumbstick scrolls. Picking a map puts you in the driver's seat with the HUD
 (speed, score, points, lap, minimap) floating above the dash. The menu button takes you back to the menu.
+Your view is put exactly at the driver's eyes (your real head height is cancelled out; Y recenters).
+You have gloved hands (`vr_hand.gd`); squeeze grip with a hand on the steering wheel rim to take hold of
+it, then turn it like a real wheel (6:1 to the front wheels, hand over hand works). Letting go hands the
+steering back to the thumbstick.
+
+**Mirrors:** both door mirrors and the rear-view mirror really work: each one renders what's behind
+from the mirror (flipped like a mirror). They only render from the driver's seat (cockpit view and VR),
+since each mirror draws the world again.
 (`vr_panel.gd` draws the normal 2D menu into a SubViewport on a quad and turns the laser into mouse
 events. Dev aid: `--vrsim` runs the VR menu on the desktop and `--vrclick=Caches,Close` clicks through it.)
 
@@ -249,7 +257,8 @@ events. Dev aid: `--vrsim` runs the VR menu on the desktop and `--vrclick=Caches
 | Right trigger | Throttle |
 | Left trigger | Brake / reverse |
 | Left thumbstick | Steer |
-| Right grip or A | Handbrake |
+| Grip with a hand on the steering wheel rim | Grab the wheel and steer with your hands (one or both) |
+| A | Handbrake |
 | B | Reset car onto the road |
 | X (left) | Restart from the start line |
 | Y / stick click | Recenter view |
