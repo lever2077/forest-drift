@@ -135,6 +135,51 @@ func set_grass(q: int) -> void:
 		grass.set_quality(q)
 	save_settings()
 
+# Settings > Graphics > Baked lighting: 0 off, 1 low, 2 high (saved).
+# The world is generated when a map loads, so editor lightmaps can't be used;
+# instead Godot's SDFGI bakes the scene into a signed-distance field around the
+# camera and bounces the sun and sky light off the ground, trees and road
+# (green light under the canopy, darker contact areas, light spilling off the
+# road). High also adds screen-space indirect light for the fine detail.
+var gi_quality := 0
+
+func set_gi(q: int) -> void:
+	gi_quality = clampi(q, 0, 2)
+	_apply_gi()
+	save_settings()
+
+func _apply_gi() -> void:
+	if env == null:
+		return
+	var q := 0 if vr else gi_quality
+	env.sdfgi_enabled = q > 0
+	env.ssil_enabled = q == 2
+	if q > 0:
+		env.sdfgi_use_occlusion = true
+		env.sdfgi_read_sky_light = true
+		env.sdfgi_y_scale = Environment.SDFGI_Y_SCALE_75_PERCENT
+		env.sdfgi_cascades = 4 if q == 1 else 6
+		env.sdfgi_min_cell_size = 0.4 if q == 1 else 0.2
+		env.sdfgi_energy = 1.0
+		env.sdfgi_bounce_feedback = 0.5
+		env.ssil_radius = 4.0
+		env.ssil_intensity = 0.8
+		RenderingServer.environment_set_sdfgi_ray_count(RenderingServer.ENV_SDFGI_RAY_COUNT_32 if q == 1 else RenderingServer.ENV_SDFGI_RAY_COUNT_64)
+		RenderingServer.environment_set_sdfgi_frames_to_converge(RenderingServer.ENV_SDFGI_CONVERGE_IN_30_FRAMES if q == 1 else RenderingServer.ENV_SDFGI_CONVERGE_IN_15_FRAMES)
+		RenderingServer.gi_set_use_half_resolution(q == 1)
+
+# moving things must not be baked into the lighting (they'd leave a ghost of
+# themselves behind), so the car and its loose parts only receive it
+func _mark_gi_dynamic(n: Node) -> void:
+	if n is GeometryInstance3D:
+		n.gi_mode = GeometryInstance3D.GI_MODE_DYNAMIC
+	for c in n.get_children():
+		_mark_gi_dynamic(c)
+
+func _on_node_added(n: Node) -> void:
+	if n is GeometryInstance3D and car and is_instance_valid(car) and car.is_ancestor_of(n):
+		n.gi_mode = GeometryInstance3D.GI_MODE_DYNAMIC
+
 func _ready() -> void:
 	var t0 := Time.get_ticks_msec()
 	for a in OS.get_cmdline_user_args():
@@ -152,6 +197,12 @@ func _ready() -> void:
 	# map (picked on the start menu, remembered)
 	var cfm := ConfigFile.new()
 	var have_cfg := cfm.load(SETTINGS_PATH) == OK
+	gi_quality = int(cfm.get_value("world", "gi", 0)) if have_cfg else 0
+	for a in OS.get_cmdline_user_args():   # dev aid: --gi=0..2
+		if a.begins_with("--gi="):
+			gi_quality = int(a.substr(5))
+	_apply_gi()
+	get_tree().node_added.connect(_on_node_added)
 	if map_choice < 0:
 		map_choice = cfm.get_value("world", "map", 0) if have_cfg else 0
 	if "--endless" in OS.get_cmdline_user_args():
@@ -208,6 +259,7 @@ func _ready() -> void:
 	car.setup(track, forest, self)
 	car.model.position.z = 0.05   # put the CG between the axles
 	car.model.set_paint(Profile.skin_color(Profile.equipped_skin))   # skin from the Inventory
+	_mark_gi_dynamic(car)
 	car.set_mech_effects(car_effects)
 	car.set_mech_options(dmg_engine, dmg_wheels, wheels_fall)
 	if not test_mode:   # dev test runs don't pay into the real profile
@@ -364,6 +416,9 @@ func _build_start_screen(args: Array) -> void:
 					hud._refresh_points()
 					hud._toggle_shop_panel(hud.players_panel)
 				"settings": hud.toggle_settings()
+				"graphics":
+					hud.toggle_settings()
+					hud.settings_tabs.current_tab = 1
 				"audio":
 					hud.toggle_settings()
 					hud.settings_tabs.current_tab = hud.settings_tabs.get_tab_count() - 1
@@ -1017,6 +1072,7 @@ func save_settings() -> void:
 	cf.set_value("world", "map", map_choice)
 	cf.set_value("world", "biome", biome_name)
 	cf.set_value("world", "grass", grass_quality)
+	cf.set_value("world", "gi", gi_quality)
 	cf.set_value("world", "car_damage", car_damage)
 	cf.set_value("world", "car_effects", car_effects)
 	cf.set_value("world", "dmg_engine", dmg_engine)

@@ -350,6 +350,20 @@ func build_settings(p_envc, p_main) -> void:
 	grass_opt.custom_minimum_size = Vector2(140, 0)
 	grass_opt.item_selected.connect(func(i): main_node.set_grass(i))
 	r5.add_child(grass_opt)
+	var r5b := _row(t_gfx)
+	var bl := Label.new()
+	bl.text = "Baked lighting"
+	bl.add_theme_font_size_override("font_size", 18)
+	r5b.add_child(bl)
+	var gi_opt := _opt(["Off", "Low", "High"], "", clampi(main_node.gi_quality, 0, 2))
+	gi_opt.custom_minimum_size = Vector2(140, 0)
+	gi_opt.item_selected.connect(func(i): main_node.set_gi(i))
+	r5b.add_child(gi_opt)
+	var bn := Label.new()
+	bn.text = "light bounces off the ground and trees - High costs more FPS"
+	bn.add_theme_font_size_override("font_size", 14)
+	bn.modulate = Color(1, 1, 1, 0.6)
+	r5b.add_child(bn)
 	# --- car
 	_section(t_car, "Car")
 	var r6 := _row(t_car)

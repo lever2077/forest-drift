@@ -264,6 +264,7 @@ func _build_chunk(k: Vector2i) -> void:
 	mmi.multimesh = mm
 	mmi.position = centre
 	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mmi.gi_mode = GeometryInstance3D.GI_MODE_DYNAMIC   # lit by baked lighting, not baked into it (it streams in and out)
 	add_child(mmi)
 	chunks[k] = mmi
 

@@ -94,6 +94,13 @@ difference to the frame rate. Each tuft sits on the ground exactly as it's drawn
 gravel shoulder. The hill maps have the densest, tallest grass. Snow frosts the tips. You can set
 **Grass: Off / Low / High** under Graphics in the Settings panel (F2).
 
+## Baked lighting
+**Baked lighting: Off / Low / High** (Settings > Graphics) bakes the map into a lighting field around the
+camera (Godot's SDFGI) so sunlight and skylight bounce off the ground, road and trees: shade under the
+canopy, green light on the car in the forest. The maps are generated when they load, so this is baked at
+runtime rather than in the editor. The car and grass are lit by it but not baked into it. High adds
+screen-space indirect light and costs more FPS. It's always off in VR.
+
 ## Frame rate display
 The top-left of the HUD shows the frame rate and frame time: green at 60+ fps, yellow at 30–60, red below 30.
 The game is single-player and offline, so there's no server to ping; the readout says so.
@@ -204,7 +211,7 @@ took off with, and it lands on its suspension. Every jump longer than 0.3 s scor
 `--edgetest --speed=N` is a headless test that drives off and back onto the road edge.
 
 ## Settings (F2)
-The panel has five tabs: **World** (time and weather), **Graphics** (grass), **Car** (damage and effects),
+The panel has five tabs: **World** (time and weather), **Graphics** (grass and baked lighting), **Car** (damage and effects),
 **Display** and **Audio** (Master, Engine, Tyre squeal, Crashes / impacts and Music volume). Display switches each on-screen readout on or off: frame rate, ping, engine status, tyre and
 wheel status (one line per wheel with its condition in %), and the minimap.
 
