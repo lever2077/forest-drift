@@ -15,9 +15,9 @@ var thumb_rest: Array = []     # rest rotations of the thumb bones
 var curl := 0.0
 var grip_xf := Transform3D()   # hand model -> controller grip pose
 
-const GLOVE := Color(0.09, 0.09, 0.1)
-const BAND := Color(1.0, 0.5, 0.12)
-const RING := 12               # vertices around each ring of the tubes
+const GLOVE := Color(0.025, 0.025, 0.028)   # black glove
+const BAND := GLOVE
+const RING := 16               # vertices around each ring of the tubes (smooth, rounded)
 
 var _st: SurfaceTool
 var _nv := 0
@@ -58,16 +58,18 @@ func build(p_left: bool) -> void:
 	_st.set_skin_weight_count(SurfaceTool.SKIN_4_WEIGHTS)
 	_st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	# palm and cuff: wide and flat at the knuckles, round at the wrist
+	# a full, rounded hand: round wrist cut off flat, a thick palm that swells
+	# towards the knuckles, the back of the hand slightly domed
 	var palm_rings := [
-		[0.18, 0.050, 0.041, GLOVE], [0.135, 0.049, 0.039, GLOVE],
-		[0.128, 0.050, 0.040, BAND], [0.114, 0.049, 0.039, BAND],
-		[0.108, 0.040, 0.027, GLOVE], [0.075, 0.044, 0.018, GLOVE],
-		[0.035, 0.046, 0.017, GLOVE], [-0.004, 0.044, 0.014, GLOVE],
+		[0.17, 0.034, 0.03, GLOVE], [0.14, 0.033, 0.029, GLOVE],
+		[0.11, 0.036, 0.026, GLOVE], [0.085, 0.043, 0.026, GLOVE],
+		[0.055, 0.048, 0.025, GLOVE], [0.025, 0.05, 0.023, GLOVE],
+		[0.004, 0.049, 0.02, GLOVE], [-0.008, 0.043, 0.016, GLOVE],
 	]
 	var pts := []
 	for r in palm_rings:
 		pts.append({"c": Vector3(0, 0, r[0]), "rx": r[1], "ry": r[2], "w": [[root, 1.0]], "col": r[3]})
-	_tube(pts, Vector3.UP, true, true)
+	_tube(pts, Vector3.UP, true, true, 0.05)   # flat wrist end
 	# fingers
 	for i in 4:
 		var chain: Array = finger_bones[i]
@@ -79,19 +81,21 @@ func build(p_left: bool) -> void:
 		var z2: float = z1 - L[1]
 		var z3: float = z2 - L[2]
 		var f := []
-		for e in [[0.016, 0.0094, [[root, 1.0]]], [0.0, 0.0094, [[root, 0.5], [chain[0], 0.5]]],
-				[z1 * 0.5, 0.0092, [[chain[0], 1.0]]], [z1, 0.0090, [[chain[0], 0.5], [chain[1], 0.5]]],
-				[z1 + (z2 - z1) * 0.5, 0.0087, [[chain[1], 1.0]]], [z2, 0.0084, [[chain[1], 0.5], [chain[2], 0.5]]],
-				[z2 + (z3 - z2) * 0.6, 0.0081, [[chain[2], 1.0]]], [z3, 0.0076, [[chain[2], 1.0]]]]:
-			f.append({"c": Vector3(x, 0, e[0]), "rx": e[1], "ry": e[1] * 0.92, "w": e[2], "col": GLOVE})
+		# thick, soft fingers that taper to rounded tips and swell a little at
+		# the joints, starting inside the palm so they blend into it
+		for e in [[0.02, 0.0118, [[root, 1.0]]], [0.0, 0.0115, [[root, 0.5], [chain[0], 0.5]]],
+				[z1 * 0.5, 0.0106, [[chain[0], 1.0]]], [z1, 0.0108, [[chain[0], 0.5], [chain[1], 0.5]]],
+				[z1 + (z2 - z1) * 0.5, 0.0099, [[chain[1], 1.0]]], [z2, 0.0100, [[chain[1], 0.5], [chain[2], 0.5]]],
+				[z2 + (z3 - z2) * 0.6, 0.0092, [[chain[2], 1.0]]], [z3, 0.0084, [[chain[2], 1.0]]]]:
+			f.append({"c": Vector3(x, 0.002, e[0]), "rx": e[1], "ry": e[1] * 0.88, "w": e[2], "col": GLOVE})
 		_tube(f, Vector3.UP, true, true)
 	# thumb, along its own bones
 	var g0 := skel.get_bone_global_rest(t0)
 	var g1 := skel.get_bone_global_rest(t1)
 	var th := []
-	for e in [[g0, 0.018, 0.0115, [[root, 1.0]]], [g0, 0.0, 0.0112, [[root, 0.5], [t0, 0.5]]],
-			[g0, -0.02, 0.011, [[t0, 1.0]]], [g1, 0.0, 0.0105, [[t0, 0.5], [t1, 0.5]]],
-			[g1, -0.018, 0.0098, [[t1, 1.0]]], [g1, -0.031, 0.0092, [[t1, 1.0]]]]:
+	for e in [[g0, 0.03, 0.017, [[root, 1.0]]], [g0, 0.012, 0.015, [[root, 0.6], [t0, 0.4]]],
+			[g0, -0.008, 0.0135, [[t0, 1.0]]], [g1, 0.0, 0.0125, [[t0, 0.5], [t1, 0.5]]],
+			[g1, -0.017, 0.0115, [[t1, 1.0]]], [g1, -0.031, 0.0102, [[t1, 1.0]]]]:
 		var gx: Transform3D = e[0]
 		th.append({"c": gx * Vector3(0, 0, e[1]), "rx": e[2], "ry": e[2] * 0.9, "w": e[3], "col": GLOVE})
 	_tube(th, Vector3.UP, true, true)
@@ -100,7 +104,10 @@ func build(p_left: bool) -> void:
 	mi.mesh = _st.commit()
 	var mat := StandardMaterial3D.new()
 	mat.vertex_color_use_as_albedo = true
-	mat.roughness = 0.7
+	mat.roughness = 0.45            # soft sheen like a leather glove
+	mat.rim_enabled = true          # keeps the black shape readable in shade
+	mat.rim = 0.25
+	mat.rim_tint = 0.3
 	mi.material_override = mat
 	skel.add_child(mi)
 	mi.skeleton = NodePath("..")
@@ -116,7 +123,7 @@ func _bone(bname: String, parent: int, rest: Transform3D) -> int:
 	return b
 
 # a closed tube through rings {"c" centre, "rx"/"ry" radii, "w" [[bone, weight]], "col"}
-func _tube(rings: Array, up_hint: Vector3, cap0: bool, cap1: bool) -> void:
+func _tube(rings: Array, up_hint: Vector3, cap0: bool, cap1: bool, cap0_depth := -1.0) -> void:
 	var n := rings.size()
 	var first := _nv
 	for i in n:
@@ -150,7 +157,10 @@ func _tube(rings: Array, up_hint: Vector3, cap0: bool, cap1: bool) -> void:
 		var other: Vector3 = rings[i - 1 if i > 0 else 1]["c"]
 		var out := (c - other).normalized()
 		var tip := _nv
-		_vert(c + out * min(float(rings[i]["rx"]), float(rings[i]["ry"])) * 0.9, rings[i]["w"], rings[i]["col"])
+		var depth: float = min(float(rings[i]["rx"]), float(rings[i]["ry"])) * 0.9
+		if e[2] < 0.0 and cap0_depth >= 0.0:
+			depth *= cap0_depth   # a flat end (the cut-off wrist)
+		_vert(c + out * depth, rings[i]["w"], rings[i]["col"])
 		for k in RING:
 			var a0 := first + i * RING + k
 			var a1 := first + i * RING + (k + 1) % RING
@@ -182,8 +192,13 @@ func set_curl(grip: float, index := -1.0) -> void:
 	var s := 1.0 if left else -1.0
 	for i in finger_bones.size():
 		var c := grip if (i > 0 or index < 0.0) else index
+		c = 0.22 + c * 0.78     # a relaxed hand is never dead straight
+		var spread: float = [0.09, 0.03, -0.03, -0.1][i] * s * (1.0 - c)   # fingers fan out a little when open
 		var chain: Array = finger_bones[i]
 		for k in chain.size():
-			skel.set_bone_pose_rotation(chain[k], Quaternion(Vector3.RIGHT, -c * [1.25, 1.45, 1.05][k]))
+			var q := Quaternion(Vector3.RIGHT, -c * [1.25, 1.45, 1.05][k])
+			if k == 0:
+				q = Quaternion(Vector3.UP, spread) * q
+			skel.set_bone_pose_rotation(chain[k], q)
 	skel.set_bone_pose_rotation(thumb_bones[0], Quaternion(Basis.from_euler(Vector3(-grip * 0.35, (0.75 - grip * 0.55) * s, 0))))
 	skel.set_bone_pose_rotation(thumb_bones[1], Quaternion(Vector3.RIGHT, -grip * 0.7))

@@ -21,6 +21,7 @@ var paint_color := Color(0.012, 0.012, 0.015)   # gloss black (Nismo build)
 var body: Node3D          # everything that rolls/pitches with suspension
 var wheels: Array = []    # each: {"pivot": Node3D, "spin": Node3D, "left": bool, "front": bool}
 var steering_wheel: Node3D
+var wheel_override := NAN   # VR: steering wheel angle set by the hands holding it
 var tail_mat: StandardMaterial3D
 var head_mat: StandardMaterial3D
 var head_lights: Array[SpotLight3D] = []
@@ -1674,7 +1675,8 @@ func update_visuals(steer: float, wheel_spin_f: float, wheel_spin_r: float, roll
 		pivot.rotation.z = lean + sin(spin_ang) * wheel_wobble[wj]
 		pivot.rotation.x = cos(spin_ang) * wheel_wobble[wj] * 0.6
 	if steering_wheel:
-		steering_wheel.rotation.z = steer * 14.0   # 14:1 steering ratio (full lock ~1.6 turns)
+		# 18:1 steering ratio; while VR hands hold it, it's where the hands put it
+		steering_wheel.rotation.z = wheel_override if not is_nan(wheel_override) else steer * 18.0
 	body.rotation = Vector3(pitch, 0, roll)
 	if mirrors_on:
 		for m in mirrors:

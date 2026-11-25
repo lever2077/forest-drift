@@ -1275,7 +1275,7 @@ var xr_eye := Vector3.ZERO      # where the eyes should be, in xr_origin's paren
 var hands := {}                 # controller -> vr_hand.gd
 var grabs := {}                 # controller -> {"last", "acc", "w0", "rim"} while holding the wheel
 var grip_was := {}              # controller -> grip held last frame (a grab needs a fresh squeeze)
-const WHEEL_RATIO := 14.0       # steering ratio like a real car: wheel turns 14x the front wheels (matches car_model)
+const WHEEL_RATIO := 18.0       # steering ratio: wheel turns 18x the front wheels (matches car_model)
 const RIM_R := 0.18             # steering wheel rim radius (car_model)
 const VrHand = preload("res://scripts/vr_hand.gd")
 
@@ -1348,7 +1348,7 @@ func _vr_hands_tick() -> void:
 	var pivot: Node3D = null
 	if car and car.model.steering_wheel:
 		pivot = car.model.steering_wheel.get_parent()
-	var wheel_now: float = car.steer * WHEEL_RATIO if car else 0.0
+	var wheel_now: float = car.model.steering_wheel.rotation.z if car and car.model.steering_wheel else 0.0
 	var targets := []
 	for c in hands.keys():
 		var xcon: XRController3D = c
@@ -1394,7 +1394,12 @@ func _vr_hands_tick() -> void:
 			var sum := 0.0
 			for t in targets:
 				sum += t
-			car.wheel_target = sum / targets.size() / WHEEL_RATIO
+			var lock: float = car.MAX_STEER * WHEEL_RATIO   # the wheel stops at full lock
+			var ang := clampf(sum / targets.size(), -lock, lock)
+			car.model.wheel_override = ang
+			car.wheel_target = ang / WHEEL_RATIO
+		else:
+			car.model.wheel_override = NAN
 
 # VR start menu: aim the lasers at the screen, trigger clicks, stick scrolls
 var vr_scripted := false
@@ -1511,6 +1516,12 @@ func _on_xr_button(name: String, left: bool) -> void:
 func _run_screenshots() -> void:
 	set_process(false)
 	car.model.set_mirrors_active(true)
+	for a in OS.get_cmdline_user_args():   # dev aid: --offroad=30 parks the car that far to the side of the road
+		if a.begins_with("--offroad="):
+			var side := Vector3(cos(car.yaw), 0, -sin(car.yaw))
+			var p: Vector3 = car.global_position + side * float(a.substr(10))
+			car.global_position = Vector3(p.x, track.ground_h(p.x, p.z) + 0.3, p.z)
+			car.vel = Vector3.ZERO
 	await get_tree().create_timer(2.5).timeout
 	var shots := [
 		["chase", 0],

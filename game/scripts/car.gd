@@ -664,6 +664,11 @@ func _wheel_ground(x: float, z: float, dir: Vector3) -> float:
 		var dd: float = d
 		var hs: float = track.ground_h(x + dir.x * dd, z + dir.z * dd)
 		h = max(h, hs - (WHEEL_R - sqrt(WHEEL_R * WHEEL_R - dd * dd)))
+	# the tread is flat and ~25 cm wide: on a side slope its uphill edge touches
+	# first (sampling only the centre let the tyre sink into the slope)
+	for d in [-0.11, 0.11]:
+		var dd: float = d
+		h = max(h, track.ground_h(x - dir.z * dd, z + dir.x * dd))
 	return h
 
 # Vertical rigid-body step: heave, pitch and roll driven by the four suspension
@@ -832,12 +837,16 @@ func _step(dt: float) -> void:
 	# ---- steering
 	var target: float
 	var max_st: float = min(MAX_STEER * steer_k, 1.05) * (1.0 - 0.55 * steer_broken)
+	# the faster you go the less the same input turns the front wheels (like a
+	# real car's speed-sensitive steering and the tyres' own understeer): full
+	# angle when parking, about a third of it at 150 km/h
+	var speed_k := lerpf(1.0, 0.35, clampf(speed / 42.0, 0.0, 1.0))
 	if wheel_hold:
-		# VR hands on the steering wheel: the front wheels follow it directly
-		# (no speed limit, no countersteer assist - you're doing the steering)
-		target = clampf(wheel_target, -max_st, max_st)
+		# VR hands on the steering wheel (no countersteer assist - you're steering)
+		target = clampf(wheel_target * speed_k, -max_st, max_st)
 	elif in_analog:
-		target = -in_steer * max_st
+		# stick: gentle around the centre (squared), stronger at full deflection
+		target = -signf(in_steer) * in_steer * in_steer * max_st * speed_k
 	else:
 		var lim := lerpf(max_st, 0.32 * steer_k, clampf(speed / 55.0, 0.0, 1.0))
 		target = -in_steer * lim
@@ -1100,7 +1109,7 @@ func _post_step(delta: float) -> void:
 	# wheels move up and down in their arches with the suspension
 	var offs := []
 	for i in 4:
-		offs.append(clampf(wheel_comp[i] - c0[i], -c0[i], BUMP_TRAVEL + 0.02))
+		offs.append(clampf(wheel_comp[i] - c0[i], -c0[i], BUMP_TRAVEL + 0.08))   # let the wheel rise into the arch instead of sinking into the ground
 	model.update_visuals(steer, wf, wr, 0.0, 0.0, delta, offs)
 	model.set_brake(in_brake > 0.1 and gear != -1 or (gear == -1 and in_throttle > 0.1))
 

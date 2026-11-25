@@ -243,7 +243,7 @@ trigger to click; the thumbstick scrolls. Picking a map puts you in the driver's
 (speed, score, points, lap, minimap) floating above the dash. The menu button takes you back to the menu.
 Your view is put exactly at the driver's eyes (your real head height is cancelled out; Y recenters).
 You have gloved hands (`vr_hand.gd`); squeeze grip with a hand on the steering wheel rim to take hold of
-it, then turn it like a real wheel (6:1 to the front wheels, hand over hand works). Letting go hands the
+it, then turn it like a real wheel (18:1 to the front wheels, less at speed; hand over hand works). Letting go hands the
 steering back to the thumbstick.
 
 **Mirrors:** both door mirrors and the rear-view mirror really work: each one renders what's behind

@@ -229,39 +229,78 @@ func _nearest_index_hash(x: float, z: float) -> int:
 
 # height of the terrain ribbon exactly as drawn: rows every 2 samples, columns at
 # the OFFS distances either side of the road, straight lines in between
+#
+# Works on the real mesh: finds the quad of the strip the point is in (rows r0,
+# r1 and columns k, k+1, built exactly like _build_chunk builds them, clipping
+# included) and returns the height of the triangle it's on. Each quad is drawn
+# as two triangles split along its B-C diagonal.
 func surface_h(x: float, z: float) -> float:
 	var i := _nearest_index_hash(x, z)
 	if i < 0:
 		return base_hill(x, z)
 	var n := pts.size()
 	var r0 := clampi((i / 2) * 2, 0, n - 3)
+	# the point may be just behind row r0: then it's in the previous quad row
+	var u := _row_u(r0, x, z)
+	if u < 0.0 and r0 >= 2:
+		r0 -= 2
+		u = _row_u(r0, x, z)
 	var r1 := mini(r0 + 2, n - 1)
-	var p0: Vector3 = pts[r0]
-	var p1: Vector3 = pts[r1]
+	u = clampf(u, 0.0, 1.0)
 	var l0 := Vector3(-tans[r0].z, 0, tans[r0].x)
 	var l1 := Vector3(-tans[r1].z, 0, tans[r1].x)
-	# position between the two rows and sideways offset
-	var along := Vector3(p1.x - p0.x, 0, p1.z - p0.z)
-	var u := clampf((Vector3(x - p0.x, 0, z - p0.z)).dot(along) / max(along.length_squared(), 1e-4), 0.0, 1.0)
-	var o := (Vector3(x - p0.x, 0, z - p0.z)).dot(l0.lerp(l1, u).normalized())
-	var ao: float = abs(o)
-	if ao >= OFFS[OFFS.size() - 1]:
-		return base_hill(x, z)
-	# the drawn strips are clipped (see _row_limits): clip the same way here
-	var l0lim := _row_limits(r0)
-	var l1lim := _row_limits(r1)
-	var cap: float = min(l0lim.x, l1lim.x) if o >= 0.0 else min(l0lim.y, l1lim.y)
-	ao = min(ao, cap)
+	var pu: Vector3 = (pts[r0] as Vector3).lerp(pts[r1], u)
+	var o := Vector3(x - pu.x, 0, z - pu.z).dot(l0.lerp(l1, u).normalized())
+	var cols := OFFS.size() * 2 - 1
+	var far0 := _col_o(r0, 0)
+	var far1 := _col_o(r0, cols - 1)
+	if o <= lerpf(far0, _col_o(r1, 0), u) or o >= lerpf(far1, _col_o(r1, cols - 1), u):
+		return base_hill(x, z)        # past the strip: the far terrain
 	var k := 0
-	while k < OFFS.size() - 2 and OFFS[k + 1] < ao:
+	while k < cols - 2 and lerpf(_col_o(r0, k + 1), _col_o(r1, k + 1), u) < o:
 		k += 1
-	var oa: float = OFFS[k]
-	var ob: float = OFFS[k + 1]
-	var t := (ao - oa) / (ob - oa)
-	var sg := 1.0 if o >= 0.0 else -1.0
-	var h0 := lerpf(_rib_h(p0, l0, oa * sg), _rib_h(p0, l0, ob * sg), t)
-	var h1 := lerpf(_rib_h(p1, l1, oa * sg), _rib_h(p1, l1, ob * sg), t)
-	return lerpf(h0, h1, u)
+	var A := _rib_vert(r0, k)
+	var B := _rib_vert(r0, k + 1)
+	var C := _rib_vert(r1, k)
+	var D := _rib_vert(r1, k + 1)
+	var P := Vector3(x, 0, z)
+	# which side of the B-C diagonal: A's triangle or D's
+	var side_p := _side(B, C, P)
+	var side_a := _side(B, C, A)
+	if (side_p >= 0.0) == (side_a >= 0.0):
+		return _tri_h(A, B, C, x, z)
+	return _tri_h(B, C, D, x, z)
+
+# how far along from row r0 to row r0+2 the point is (0..1 inside)
+func _row_u(r0: int, x: float, z: float) -> float:
+	var p0: Vector3 = pts[r0]
+	var p1: Vector3 = pts[mini(r0 + 2, pts.size() - 1)]
+	var along := Vector3(p1.x - p0.x, 0, p1.z - p0.z)
+	return Vector3(x - p0.x, 0, z - p0.z).dot(along) / max(along.length_squared(), 1e-4)
+
+# signed sideways offset of column k on row ri, clipped like _build_chunk
+func _col_o(ri: int, k: int) -> float:
+	var o: float = OFFS[abs(k - (OFFS.size() - 1))] * (1.0 if k >= OFFS.size() - 1 else -1.0)
+	var lim := _row_limits(ri)
+	return min(o, lim.x) if o >= 0.0 else max(o, -lim.y)
+
+# the strip vertex (row ri, column k) exactly as _build_chunk makes it
+func _rib_vert(ri: int, k: int) -> Vector3:
+	var p: Vector3 = pts[ri]
+	var l := Vector3(-tans[ri].z, 0, tans[ri].x)
+	var o := _col_o(ri, k)
+	var wp := Vector3(p.x, 0, p.z) + l * o
+	return Vector3(wp.x, _terrain_from(wp.x, wp.z, abs(o), p.y), wp.z)
+
+static func _side(a: Vector3, b: Vector3, p: Vector3) -> float:
+	return (b.x - a.x) * (p.z - a.z) - (b.z - a.z) * (p.x - a.x)
+
+# height at (x, z) on the plane through triangle a, b, c
+static func _tri_h(a: Vector3, b: Vector3, c: Vector3, x: float, z: float) -> float:
+	var nrm := (b - a).cross(c - a)
+	if absf(nrm.y) < 1e-6:
+		return (a.y + b.y + c.y) / 3.0
+	return a.y - (nrm.x * (x - a.x) + nrm.z * (z - a.z)) / nrm.y
 
 # How far the terrain strip at road sample ri may reach on its left (x) and
 # right (y) side. A strip must not fold over itself on the inside of a bend
