@@ -244,6 +244,8 @@ func _ready() -> void:
 		_bot_test()
 	if "--edgetest" in args:
 		_edge_test()
+	if "--fliptest" in args:
+		_flip_test()
 	if "--menutest" in args:
 		_menu_test_step()
 
@@ -457,6 +459,67 @@ func _menu_test_step() -> void:
 			car.vel = dir * 110.0 / 3.6 + Vector3(0, 3, 0)
 			await get_tree().create_timer(0.15 + 0.2 * (menu_test_n % 4)).timeout
 		_back_to_menu()
+
+# dev aid: --fliptest drops the car on its side / roof (still, sliding, spinning,
+# rolling over) and logs whether it settles on the ground and stays put
+func _flip_test() -> void:
+	set_process(false)
+	var cases := [
+		["side, still", 0.0, PI / 2, 0.0, 0.0, 0.0],
+		["roof, still", 0.0, PI, 0.0, 0.0, 0.0],
+		["side, sliding 60", 0.0, -PI / 2, 60.0, 0.0, 0.0],
+		["roof, sliding+spin", 0.0, PI, 50.0, 2.5, 0.0],
+		["rollover at 80", 0.0, 0.0, 80.0, 0.0, 7.0],
+	]
+	for c in cases:
+		await get_tree().create_timer(0.5).timeout
+		car.reset_on_track()
+		var fw := Vector3(-sin(car.yaw), 0, -cos(car.yaw))
+		car.pitch = c[1]
+		car.roll = c[2]
+		car.pitch_rate = 0.0
+		car.roll_rate = c[5]
+		car.vy = 0.0
+		car.vel = fw * float(c[3]) / 3.6
+		car.yaw_rate = c[4]
+		car.global_position.y += 1.2
+		car.in_throttle = 0.0
+		var t := 0.0
+		var log_t := 0.0
+		var max_gap_late := 0.0
+		var yaw0: float = car.yaw
+		var yaw_late := 0.0
+		var ang_late := 0.0
+		var pr0 := Vector2.ZERO
+		while t < 6.0:
+			await get_tree().physics_frame
+			var dt := get_physics_process_delta_time()
+			t += dt
+			car.in_throttle = 0.0
+			car.in_brake = 0.0
+			car.in_steer = 0.0
+			# gap between the lowest corner of the body and the ground
+			var b: Basis = car._body_basis()
+			var low := 1e9
+			for cp in car.CHASSIS_PTS:
+				var wp: Vector3 = car.global_position + b * (cp as Vector3)
+				low = min(low, wp.y - track.ground_h(wp.x, wp.z))
+			for wl in car.WHEEL_LOCAL:
+				var wp2: Vector3 = car.global_position + b * ((wl as Vector3) + Vector3(0, -car.c0[0], 0))
+				low = min(low, wp2.y - track.ground_h(wp2.x, wp2.z))
+			if t > 3.0:
+				if pr0 == Vector2.ZERO:
+					pr0 = Vector2(car.pitch, car.roll)
+					yaw0 = car.yaw
+				max_gap_late = max(max_gap_late, low)
+				yaw_late = abs(car.yaw - yaw0)
+				ang_late = max(ang_late, Vector2(car.pitch, car.roll).distance_to(pr0))
+			log_t += dt
+			if log_t >= 0.5 and "--verbose" in OS.get_cmdline_user_args():
+				log_t = 0.0
+				print("   t=%.1f gap=%.2f pitch=%.0f roll=%.0f yawrate=%.2f v=%.1f vy=%.2f grounded=%s" % [t, low, rad_to_deg(car.pitch), rad_to_deg(car.roll), car.yaw_rate, car.speed * 3.6, car.vy, car.grounded])
+		print("FLIP %-20s after 3 s: max gap %.2f m, turned %.0f deg, tilt moved %.0f deg, speed %.1f km/h, up.y=%.2f" % [c[0], max_gap_late, rad_to_deg(yaw_late), rad_to_deg(ang_late), car.speed * 3.6, car._body_basis().y.y])
+	get_tree().quit()
 
 # drives off the road edge and back on at a given speed and logs body motion
 func _edge_test() -> void:

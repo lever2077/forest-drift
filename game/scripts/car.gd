@@ -476,9 +476,20 @@ func _step_body(dt: float) -> void:
 	var hv := Vector3(vel.x, 0, vel.z)
 	var hs := hv.length()
 	var dir: Vector3 = hv / hs if hs > 0.5 else Vector3(-sin(yaw), 0.0, -cos(yaw))
-	var omega: Vector3 = bas.x * pitch_rate + bas.z * roll_rate + Vector3.UP * yaw_rate
+	# the body is Ry(yaw) * Rx(pitch) * Rz(roll): pitch turns about the level
+	# "right" axis, roll about the body's own z. (Using the body's x for pitch
+	# flipped the sign upside down, so the ground pushed the car over instead of
+	# settling it: it floated and spun on its roof.)
+	var pitch_ax := Vector3(cos(yaw), 0.0, -sin(yaw))
+	var omega: Vector3 = pitch_ax * pitch_rate + bas.z * roll_rate + Vector3.UP * yaw_rate
 	var fy := -MASS * G
 	var torque := Vector3.ZERO
+	# gravity pulls at the centre of mass, not at road level: that's what lets a
+	# car lie on its side or roof. Faded in with the tilt so the normal handling
+	# (tuned without it) is untouched while the wheels are down.
+	var tilt_k := clampf((0.85 - bas.y.y) / 0.35, 0.0, 1.0)
+	if tilt_k > 0.0:
+		torque += (bas * Vector3(0.0, H_CG, 0.0)).cross(Vector3(0.0, -MASS * G, 0.0)) * tilt_k
 	var n_contact := 0
 	var was_grounded := grounded
 	var hub_scrape := 0.0
@@ -571,7 +582,7 @@ func _step_body(dt: float) -> void:
 	var contact := n_contact / 4.0
 	# tyre forces act at the road, below the centre of mass: the body squats,
 	# dives and leans (only as much as the wheels are actually on the ground)
-	var tp: float = torque.dot(bas.x) + MASS * ax_f * H_CG * 0.9 * contact
+	var tp: float = torque.dot(pitch_ax) + MASS * ax_f * H_CG * 0.9 * contact
 	var tr: float = torque.dot(bas.z) + MASS * ay_f * H_CG * 0.35 * contact
 	pitch_rate += tp / I_PITCH * dt
 	roll_rate += tr / I_ROLL * dt
