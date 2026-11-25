@@ -213,10 +213,45 @@ func _tab(tabs: TabContainer, title: String) -> VBoxContainer:
 	tabs.add_child(m)
 	return vb
 
+# checkbox icons with an orange outline (the default dark ones are hard to see):
+# empty orange box when off, filled orange box with a dark tick when on
+static func _check_icon(checked: bool, disabled: bool) -> ImageTexture:
+	var s := 22
+	var img := Image.create(s, s, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	var edge := Color(1.0, 0.6, 0.2) if not disabled else Color(0.55, 0.42, 0.3)
+	var fill := Color(0.08, 0.08, 0.09)
+	if checked:
+		fill = edge
+	for y in s:
+		for x in s:
+			var border := x < 2 or y < 2 or x >= s - 2 or y >= s - 2
+			img.set_pixel(x, y, edge if border else fill)
+	if checked:
+		# tick: two thick strokes
+		var tick := Color(0.08, 0.06, 0.04)
+		for i in 50:
+			var t := i / 49.0
+			var a := Vector2(5, 11).lerp(Vector2(9, 16), t) if t < 0.5 else Vector2(9, 16).lerp(Vector2(17, 6), (t - 0.5) * 2.0)
+			for dx in range(-1, 2):
+				for dy in range(-1, 2):
+					img.set_pixel(clampi(int(a.x) + dx, 0, s - 1), clampi(int(a.y) + dy, 0, s - 1), tick)
+	return ImageTexture.create_from_image(img)
+
+static func _orange_check_theme() -> Theme:
+	var th := Theme.new()
+	th.set_icon("unchecked", "CheckBox", _check_icon(false, false))
+	th.set_icon("checked", "CheckBox", _check_icon(true, false))
+	th.set_icon("unchecked_disabled", "CheckBox", _check_icon(false, true))
+	th.set_icon("checked_disabled", "CheckBox", _check_icon(true, true))
+	th.set_constant("h_separation", "CheckBox", 10)
+	return th
+
 func build_settings(p_envc, p_main) -> void:
 	envc = p_envc
 	main_node = p_main
 	settings_panel = PanelContainer.new()
+	settings_panel.theme = _orange_check_theme()
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.04, 0.05, 0.06, 0.92)
 	sb.set_corner_radius_all(14)
@@ -469,7 +504,7 @@ func _toggle_panel(p: Control) -> void:
 	_layout()
 
 func _menu_panels() -> Array:
-	return [settings_panel, controls_panel, cache_panel, inventory_panel].filter(func(x): return x != null)
+	return [settings_panel, controls_panel, cache_panel, inventory_panel, players_panel].filter(func(x): return x != null)
 
 func close_menu_panels() -> void:
 	for x in _menu_panels():
@@ -568,7 +603,16 @@ func build_menu(entries: Array, current: int) -> void:
 	menu_points_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	menu_points_lbl.add_theme_font_size_override("font_size", 20)
 	menu_points_lbl.add_theme_color_override("font_color", Color(1.0, 0.85, 0.35))
-	v.add_child(menu_points_lbl)
+	var prow := _row(v)
+	prow.alignment = BoxContainer.ALIGNMENT_CENTER
+	prow.add_theme_constant_override("separation", 24)
+	prow.add_child(menu_points_lbl)
+	var pbtn := Button.new()
+	pbtn.text = "Players"
+	pbtn.custom_minimum_size = Vector2(150, 36)
+	pbtn.add_theme_font_size_override("font_size", 17)
+	pbtn.pressed.connect(func(): _toggle_shop_panel(players_panel))
+	prow.add_child(pbtn)
 	_refresh_points()
 	# update button: checks GitHub on its own when the menu opens
 	var row3 := _row(v)
@@ -596,6 +640,7 @@ func build_menu(entries: Array, current: int) -> void:
 	add_child(menu)
 	cache_panel = _build_shop_panel("CACHES")
 	inventory_panel = _build_shop_panel("INVENTORY")
+	players_panel = _build_shop_panel("PLAYERS")
 	_layout()
 	if first_btn:
 		first_btn.grab_focus()
@@ -603,6 +648,7 @@ func build_menu(entries: Array, current: int) -> void:
 # ---------------------------------------------------------------- start menu: cache + inventory
 var cache_panel: PanelContainer
 var inventory_panel: PanelContainer
+var players_panel: PanelContainer
 var menu_points_lbl: Label
 var updater
 var update_btn: Button
@@ -624,7 +670,62 @@ func _on_update_status(text: String, can_install: bool) -> void:
 func _refresh_points() -> void:
 	Profile.load_profile()
 	if menu_points_lbl:
-		menu_points_lbl.text = "POINTS  %d" % Profile.points
+		menu_points_lbl.text = "%s     POINTS  %d" % [Profile.player.to_upper(), Profile.points]
+
+# Players panel: everyone who plays on this computer, each with their own save
+var players_msg := ""
+
+func _fill_players(p: PanelContainer, list: VBoxContainer) -> void:
+	for nm in Profile.players:
+		var pname: String = nm
+		var r := HBoxContainer.new()
+		r.add_theme_constant_override("separation", 14)
+		list.add_child(r)
+		var l := Label.new()
+		var cur := pname == Profile.player
+		l.text = pname + ("   (playing)" if cur else "")
+		l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		l.add_theme_font_size_override("font_size", 20)
+		if cur:
+			l.add_theme_color_override("font_color", Color(0.6, 1.0, 0.6))
+		r.add_child(l)
+		var b := Button.new()
+		b.text = "Playing" if cur else "Play as"
+		b.disabled = cur
+		b.focus_mode = Control.FOCUS_NONE
+		b.custom_minimum_size = Vector2(120, 0)
+		b.add_theme_font_size_override("font_size", 18)
+		b.pressed.connect(func():
+			Profile.switch_player(pname)
+			players_msg = ""
+			_fill_shop_panel(p))
+		r.add_child(b)
+	list.add_child(HSeparator.new())
+	var add := HBoxContainer.new()
+	add.add_theme_constant_override("separation", 12)
+	list.add_child(add)
+	var edit := LineEdit.new()
+	edit.placeholder_text = "New player name"
+	edit.max_length = Profile.MAX_NAME
+	edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	edit.add_theme_font_size_override("font_size", 18)
+	add.add_child(edit)
+	var ab := Button.new()
+	ab.text = "Add player"
+	ab.custom_minimum_size = Vector2(140, 0)
+	ab.add_theme_font_size_override("font_size", 18)
+	add.add_child(ab)
+	var do_add := func(_t = ""):
+		var err := Profile.create_player(edit.text)
+		players_msg = err
+		_fill_shop_panel(p)
+	ab.pressed.connect(do_add)
+	edit.text_submitted.connect(do_add)
+	var note := Label.new()
+	note.text = players_msg if players_msg != "" else "Each player has their own points, skins and car colour."
+	note.add_theme_font_size_override("font_size", 15)
+	note.add_theme_color_override("font_color", Color(1.0, 0.5, 0.4) if players_msg != "" else Color(0.75, 0.78, 0.75))
+	list.add_child(note)
 
 func _build_shop_panel(title_text: String) -> PanelContainer:
 	var p := PanelContainer.new()
@@ -716,6 +817,9 @@ func _fill_shop_panel(p: PanelContainer) -> void:
 	var list: VBoxContainer = p.get_meta("list")
 	for c in list.get_children():
 		c.queue_free()
+	if p == players_panel:
+		_fill_players(p, list)
+		return
 	if p == cache_panel:
 		# what the last cache gave you
 		if cache_result != "":
@@ -738,15 +842,42 @@ func _fill_shop_panel(p: PanelContainer) -> void:
 			var names := []
 			for iid in c["items"]:
 				names.append(Profile.item_name(iid))
-			var r := _item_row(list, {"name": String(c["name"]).to_upper(), "info": "%s\nContains: %s" % [c["info"], ", ".join(names)]}, "%d pts" % price)
-			r.get_child(0).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-			r.get_child(0).custom_minimum_size = Vector2(420, 0)
+			# a card: picture | name, price, contents | Open
+			var r := HBoxContainer.new()
+			r.add_theme_constant_override("separation", 18)
+			list.add_child(r)
+			var art := CacheArt.new()
+			art.custom_minimum_size = Vector2(150, 150)
+			if c.has("tint"):
+				art.tint = c["tint"]
+			r.add_child(art)
+			var info := VBoxContainer.new()
+			info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			info.alignment = BoxContainer.ALIGNMENT_CENTER
+			r.add_child(info)
+			var nl := Label.new()
+			nl.text = String(c["name"]).to_upper()
+			nl.add_theme_font_size_override("font_size", 26)
+			nl.add_theme_color_override("font_color", Color(1.0, 0.7, 0.3))
+			info.add_child(nl)
+			var pl := Label.new()
+			pl.text = "%d points" % price
+			pl.add_theme_font_size_override("font_size", 20)
+			pl.add_theme_color_override("font_color", Color(1.0, 0.85, 0.35))
+			info.add_child(pl)
+			var dl := Label.new()
+			dl.text = "%s\nContains: %s" % [c["info"], ", ".join(names)]
+			dl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			dl.custom_minimum_size = Vector2(330, 0)
+			dl.add_theme_font_size_override("font_size", 15)
+			dl.add_theme_color_override("font_color", Color(0.78, 0.82, 0.78))
+			info.add_child(dl)
 			var b := Button.new()
 			b.text = "Open"
 			b.focus_mode = Control.FOCUS_NONE
-			b.custom_minimum_size = Vector2(100, 44)
+			b.custom_minimum_size = Vector2(130, 56)
 			b.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-			b.add_theme_font_size_override("font_size", 19)
+			b.add_theme_font_size_override("font_size", 22)
 			b.disabled = Profile.points < price
 			b.tooltip_text = "" if not b.disabled else "Not enough points"
 			b.pressed.connect(func():
@@ -781,6 +912,56 @@ func _fill_shop_panel(p: PanelContainer) -> void:
 			_empty_note(list, "Open caches to get more skins.")
 
 var cache_result := ""
+
+# picture of a cache: a reinforced crate with a glowing lock, drawn in code.
+# `tint` colours the lid and bands so later caches can look different.
+class CacheArt extends Control:
+	var tint := Color(1.0, 0.6, 0.2)
+	func _draw() -> void:
+		var w := size.x
+		var h := size.y
+		var cx := w * 0.5
+		# soft glow behind and a shadow under it
+		for k in 6:
+			var r := w * (0.48 - k * 0.05)
+			draw_circle(Vector2(cx, h * 0.5), r, Color(tint.r, tint.g, tint.b, 0.035 + k * 0.012))
+		draw_set_transform(Vector2(cx, h * 0.88), 0.0, Vector2(1.0, 0.22))
+		draw_circle(Vector2.ZERO, w * 0.36, Color(0, 0, 0, 0.45))
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+		# body
+		var bx := w * 0.16
+		var bw := w * 0.68
+		var by := h * 0.44
+		var bh := h * 0.42
+		var wood := Color(0.30, 0.20, 0.12)
+		draw_rect(Rect2(bx, by, bw, bh), wood)
+		for i in 3:   # planks
+			var py := by + bh * (i + 1) / 4.0
+			draw_line(Vector2(bx, py), Vector2(bx + bw, py), wood.darkened(0.35), 2.0)
+		# lid: a slanted top so it reads as a 3D box
+		var lid := PackedVector2Array([Vector2(bx - w * 0.03, by), Vector2(bx + w * 0.06, h * 0.24),
+			Vector2(bx + bw - w * 0.06, h * 0.24), Vector2(bx + bw + w * 0.03, by)])
+		draw_colored_polygon(lid, wood.lightened(0.15))
+		draw_polyline(PackedVector2Array([lid[0], lid[1], lid[2], lid[3], lid[0]]), wood.darkened(0.5), 2.0)
+		# metal bands in the cache's colour
+		var band := tint.darkened(0.15)
+		for fx in [0.24, 0.76]:
+			var x: float = w * fx
+			draw_rect(Rect2(x - w * 0.035, by, w * 0.07, bh), band)
+			draw_line(Vector2(x, by), Vector2(x + (w * 0.03 if fx > 0.5 else -w * 0.03), h * 0.24), band, w * 0.07)
+		draw_rect(Rect2(bx - w * 0.03, by - h * 0.025, bw + w * 0.06, h * 0.05), band.darkened(0.2))
+		# rivets
+		for fx in [0.24, 0.76]:
+			for fy in [0.52, 0.66, 0.8]:
+				draw_circle(Vector2(w * fx, h * fy), w * 0.012, band.lightened(0.5))
+		# lock plate with a glowing keyhole
+		var lr := Rect2(cx - w * 0.07, by - h * 0.04, w * 0.14, h * 0.17)
+		draw_rect(lr, Color(0.85, 0.75, 0.45))
+		draw_rect(lr, Color(0.35, 0.28, 0.12), false, 2.0)
+		draw_circle(Vector2(cx, by + h * 0.03), w * 0.035, tint.lightened(0.3))
+		draw_circle(Vector2(cx, by + h * 0.03), w * 0.018, Color(1, 1, 0.85))
+		# outline of the body
+		draw_rect(Rect2(bx, by, bw, bh), wood.darkened(0.55), false, 2.0)
 
 func _swatch(c: Color, s: float) -> ColorRect:
 	var cr := ColorRect.new()
@@ -1073,7 +1254,7 @@ func _layout() -> void:
 	if controls_panel:
 		controls_panel.reset_size()
 		controls_panel.position = (vs - controls_panel.size) * 0.5
-	for sp in [cache_panel, inventory_panel]:
+	for sp in [cache_panel, inventory_panel, players_panel]:
 		if sp:
 			sp.reset_size()
 			sp.position = (vs - sp.size) * 0.5

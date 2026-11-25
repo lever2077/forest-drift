@@ -6,7 +6,7 @@
 # (it zips the game, tags v<VERSION> and uploads the GitHub release).
 extends Node
 
-const VERSION := "1.1.1"
+const VERSION := "1.2.0"
 const GITHUB_REPO := "lever2077/forest-drift"
 const UPDATE_ASSET := "game-update.zip"
 const API_URL := "https://api.github.com/repos/%s/releases/latest"

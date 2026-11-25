@@ -79,6 +79,32 @@ const CHASSIS_PTS := [
 	Vector3(-0.85, 0.16, -2.05), Vector3(0.85, 0.16, -2.05), Vector3(-0.85, 0.16, 2.1), Vector3(0.85, 0.16, 2.1),
 	Vector3(-0.7, 1.28, -0.5), Vector3(0.7, 1.28, -0.5), Vector3(-0.7, 1.28, 0.9), Vector3(0.7, 1.28, 0.9),
 	Vector3(-0.9, 0.7, 0.0), Vector3(0.9, 0.7, 0.0)]
+# The body's outer shell as contact points, for the free rigid-body mode
+# (airborne, tumbling, on its side or roof). Each one pushes back off the
+# ground and drags along it with friction wherever it touches, so the roof,
+# pillars, sides and bumpers all take their own hits.
+const HULL_PTS := [
+	# bumper corners, low
+	Vector3(-0.85, 0.16, -2.05), Vector3(0.85, 0.16, -2.05), Vector3(-0.85, 0.16, 2.1), Vector3(0.85, 0.16, 2.1),
+	# tops of the front wings and rear quarters
+	Vector3(-0.88, 0.72, -1.95), Vector3(0.88, 0.72, -1.95), Vector3(-0.88, 0.75, 2.05), Vector3(0.88, 0.75, 2.05),
+	# door sides
+	Vector3(-0.9, 0.7, 0.0), Vector3(0.9, 0.7, 0.0), Vector3(-0.9, 0.3, -0.7), Vector3(0.9, 0.3, -0.7),
+	Vector3(-0.9, 0.3, 0.9), Vector3(0.9, 0.3, 0.9),
+	# base of the windscreen pillars and the top of the rear hatch
+	Vector3(-0.8, 0.95, -1.05), Vector3(0.8, 0.95, -1.05), Vector3(-0.75, 1.0, 1.7), Vector3(0.75, 1.0, 1.7),
+	# roof: four corners and the middle
+	Vector3(-0.66, 1.28, -0.45), Vector3(0.66, 1.28, -0.45), Vector3(-0.66, 1.28, 0.85), Vector3(0.66, 1.28, 0.85),
+	Vector3(0.0, 1.31, 0.2)]
+const CG_LOCAL := Vector3(0.0, H_CG, 0.0)   # centre of mass above the body origin (road level at rest)
+const MU_BODY := 0.55                       # paint / metal sliding on tarmac
+# free rigid-body state (only while `rigid`): orientation, spin, centre of mass
+var rigid := false
+var rb_basis := Basis.IDENTITY
+var rb_w := Vector3.ZERO       # angular velocity, world frame (rad/s)
+var rb_v := Vector3.ZERO       # velocity of the centre of mass
+var rb_cg := Vector3.ZERO      # position of the centre of mass
+var rb_wheels := 0             # wheels touching the ground this step
 var c0 := [0.0, 0.0, 0.0, 0.0]          # static compression per wheel
 var wheel_comp := [0.0, 0.0, 0.0, 0.0]
 var wheel_load := [0.0, 0.0, 0.0, 0.0]
@@ -105,23 +131,6 @@ func _land(_impact: float) -> void:
 		air_landed.emit(air_time, pts)
 	air_time = 0.0
 
-# airborne: no tyre forces at all - only gravity (handled in _post_step), drag
-# and whatever spin the car already had
-func _step_air(dt: float) -> void:
-	var hv := Vector3(vel.x, 0, vel.z)
-	speed = hv.length()
-	vel -= hv * speed * 0.0002 * dt
-	yaw_rate *= 1.0 - 0.4 * dt
-	yaw += yaw_rate * dt
-	steer = move_toward(steer, -in_steer * MAX_STEER * 0.8, 4.0 * dt)
-	var thr := in_throttle if gear != -1 else in_brake
-	# wheels spin freely: revs flare on the throttle
-	rpm = move_toward(rpm, lerpf(IDLE + 1500.0, REDLINE, thr), 9000.0 * dt)
-	global_position.x += vel.x * dt
-	global_position.z += vel.z * dt
-	_collide_trees(dt)
-	rear_slide = 0.0
-	wr = lerpf(wr, rpm / 9.549 / (GEARS[max(gear, 1)] * FINAL), min(1.0, dt * 5.0))
 var dbg := ""
 var hits := 0
 
@@ -216,6 +225,8 @@ func reset_to(idx: int) -> void:
 	grounded = true
 	air_time = 0.0
 	flipped_time = 0.0
+	rigid = false
+	rb_w = Vector3.ZERO
 	track_idx = track.nearest_index(global_position, -1)
 	_cancel_drift(false)
 
@@ -448,15 +459,200 @@ func _physics_tick(delta: float) -> void:
 	var sub := 4
 	var dt := delta / sub
 	for i in sub:
-		if not grounded:
-			_step_air(dt)
+		# off the ground, or tipped past ~45 degrees: the tyre model no longer
+		# applies, so the car becomes a free rigid body until it's back on its wheels
+		if not rigid and (not grounded or _body_basis().y.y < 0.7):
+			_enter_rigid()
+		if rigid:
+			_step_rigid(dt)
+			if rb_wheels >= 3 and rb_basis.y.y > 0.9 and (rb_w - Vector3.UP * rb_w.y).length() < 2.0:
+				_exit_rigid()
 		else:
 			_step(dt)
-		_step_body(dt)
+			_step_body(dt)
 	_post_step(delta)
 
 func _body_basis() -> Basis:
+	if rigid:
+		return rb_basis
 	return Basis(Vector3.UP, yaw) * Basis.from_euler(Vector3(pitch, 0.0, roll))
+
+# ---------------------------------------------------------------- free rigid body
+# Hand-over from the driving model (yaw / pitch / roll angles and their rates,
+# rotating about the body origin) to a full 3D rigid body rotating about its
+# centre of mass, with the same motion at the moment of switching.
+func _enter_rigid() -> void:
+	var bas := _body_basis()
+	var pitch_ax := Vector3(cos(yaw), 0.0, -sin(yaw))
+	rb_w = Vector3.UP * yaw_rate + pitch_ax * pitch_rate + bas.z * roll_rate
+	rb_basis = bas
+	var r_cg: Vector3 = bas * CG_LOCAL
+	rb_cg = global_position + r_cg
+	rb_v = Vector3(vel.x, vy, vel.z) + rb_w.cross(r_cg)
+	rb_wheels = 0
+	rigid = true
+
+func _exit_rigid() -> void:
+	var bas := rb_basis
+	var e := bas.get_euler(EULER_ORDER_YXZ)
+	pitch = e.x
+	yaw = e.y
+	roll = e.z
+	# angular velocity -> rates of the three angles (well conditioned: upright here)
+	var pitch_ax := Vector3(cos(yaw), 0.0, -sin(yaw))
+	var rates: Vector3 = Basis(Vector3.UP, pitch_ax, bas.z).inverse() * rb_w
+	yaw_rate = rates.x
+	pitch_rate = rates.y
+	roll_rate = rates.z
+	var v_o: Vector3 = rb_v + rb_w.cross(global_position - rb_cg)
+	vel = Vector3(v_o.x, 0.0, v_o.z)
+	vy = v_o.y
+	wheel_gh = [NAN, NAN, NAN, NAN]
+	rigid = false
+
+func _ground_normal(x: float, z: float, h: float) -> Vector3:
+	var hx: float = track.ground_h(x + 0.3, z)
+	var hz: float = track.ground_h(x, z + 0.3)
+	return Vector3(h - hx, 0.3, h - hz).normalized()
+
+# One step of a rigid body: gravity at the centre of mass, and a contact force
+# (stiff spring + damper along the ground normal, Coulomb friction along it) at
+# every point of the shell or wheel that's in the ground. Spin follows Euler's
+# equations with the car's own inertia, so tumbles, roof landings and slides
+# all come out of the same physics.
+func _step_rigid(dt: float) -> void:
+	var bas := rb_basis
+	var origin: Vector3 = rb_cg - bas * CG_LOCAL
+	var force := Vector3(0.0, -MASS * G, 0.0)
+	var torque := Vector3.ZERO
+	var scrape := 0.0
+	var wheels := 0
+	var hard_hit := 0.0
+	var hit_pt := Vector3.ZERO
+	var hit_n := Vector3.UP
+	# --- shell (and any bare hub where a wheel has come off)
+	var pts: Array = HULL_PTS.duplicate()
+	for i in 4:
+		if wheel_off[i]:
+			pts.append((WHEEL_LOCAL[i] as Vector3) + Vector3(0.0, WHEEL_R - 0.165, 0.0))
+	for p in pts:
+		var wp: Vector3 = origin + bas * (p as Vector3)
+		var gh: float = track.ground_h(wp.x, wp.z)
+		var pen := gh - wp.y
+		if pen <= 0.0:
+			continue
+		var n := _ground_normal(wp.x, wp.z, gh)
+		var r := wp - rb_cg
+		var vp: Vector3 = rb_v + rb_w.cross(r)
+		var vn := vp.dot(n)
+		var pn := pen * n.y
+		# metal on the ground: stiff going in, almost no push back out
+		# (the panels crumple and soak up the energy rather than bouncing)
+		var fn: float = max(160000.0 * pn - 18000.0 * vn, 0.0) if vn <= 0.0 else max(40000.0 * pn - 30000.0 * vn, 0.0)
+		var vt := vp - n * vn
+		# Coulomb friction; below 2 cm/s it acts as a stiff damper so a resting car grips
+		var ft: Vector3 = -vt / max(vt.length(), 0.02) * MU_BODY * fn
+		var f: Vector3 = n * fn + ft
+		force += f
+		torque += r.cross(f)
+		scrape += fn
+		if -vn > hard_hit:
+			hard_hit = -vn
+			hit_pt = wp
+			hit_n = n
+	# --- wheels: suspension springs pushing off the ground, tyres resisting
+	# sideways sliding (they roll freely forwards). Only when they're underneath.
+	if bas.y.y > 0.2:
+		for i in 4:
+			wheel_load[i] = 0.0
+			if wheel_off[i]:
+				continue
+			var wp: Vector3 = origin + bas * (WHEEL_LOCAL[i] as Vector3)
+			var gh: float = track.ground_h(wp.x, wp.z)
+			var comp: float = gh - wp.y + c0[i]
+			wheel_comp[i] = comp
+			if comp <= 0.0:
+				continue
+			wheels += 1
+			var n := _ground_normal(wp.x, wp.z, gh)
+			var r := wp - rb_cg
+			var vp: Vector3 = rb_v + rb_w.cross(r)
+			var vn := vp.dot(n)
+			var fs: float = K_SPRING * spring_k[i] * comp - (C_REBOUND if vn > 0.0 else C_BUMP) * vn
+			var over: float = comp - c0[i] - BUMP_TRAVEL
+			if over > 0.0:
+				fs += K_SPRING * 10.0 * over - C_BUMP * 3.0 * min(vn, 0.0)
+			fs = max(fs, 0.0)
+			wheel_load[i] = fs
+			var side := bas.x - n * bas.x.dot(n)
+			side = side.normalized() if side.length() > 0.01 else bas.x
+			var fwd_ax := side.cross(n)
+			var v_side := vp.dot(side)
+			var v_fwd := vp.dot(fwd_ax)
+			var f := n * fs
+			f -= side * clampf(v_side / 0.4, -1.0, 1.0) * mu_road * fs
+			f -= fwd_ax * clampf(v_fwd / 0.4, -1.0, 1.0) * roll_road * fs
+			force += f
+			torque += r.cross(f)
+	else:
+		for i in 4:
+			wheel_load[i] = 0.0
+			wheel_comp[i] = -1.0
+	# --- air drag on the body
+	var hv := Vector3(rb_v.x, 0.0, rb_v.z)
+	force -= hv * hv.length() * drag_k
+	# --- integrate: linear, then Euler's equations in the body frame
+	rb_v += force / MASS * dt
+	rb_cg += rb_v * dt
+	var inertia := Vector3(I_PITCH, IZ, I_ROLL)
+	var bt := bas.transposed()
+	var wb: Vector3 = bt * rb_w
+	var tb: Vector3 = bt * torque
+	wb += (tb - wb.cross(wb * inertia)) / inertia * dt
+	rb_w = bas * wb
+	var wl := rb_w.length()
+	if wl > 1e-6:
+		bas = Basis(rb_w / wl, wl * dt) * bas
+	rb_basis = bas.orthonormalized()
+	# --- hand the result to the rest of the car (camera, HUD, sound, trees, rails)
+	origin = rb_cg - rb_basis * CG_LOCAL
+	global_position = origin
+	var e := rb_basis.get_euler(EULER_ORDER_YXZ)
+	pitch = e.x
+	yaw = e.y
+	roll = e.z
+	var v_o: Vector3 = rb_v + rb_w.cross(origin - rb_cg)
+	vel = Vector3(v_o.x, 0.0, v_o.z)
+	vy = v_o.y
+	speed = vel.length()
+	yaw_rate = rb_w.y
+	# trees and guardrails push the car around in the plane: carry their
+	# corrections back into the rigid body
+	var vel0 := vel
+	var yr0 := yaw_rate
+	_collide_trees(dt)
+	rb_cg += global_position - origin
+	rb_v += vel - vel0
+	rb_w.y += yaw_rate - yr0
+	# --- effects of the contacts
+	if scrape > 0.0:
+		scrape_level = max(scrape_level, clampf(speed / 12.0, 0.0, 1.0) * clampf(scrape / (MASS * G * 0.3), 0.2, 1.0))
+		_cancel_drift(drift_points > 0.0)
+	if hard_hit > 3.5:
+		# slamming the roof, a pillar, a corner or a side into the ground
+		_crash_feel(Vector3.ZERO, hard_hit * 0.8, "ground")
+		_impact("ground", hit_pt, hit_n, Vector3.ZERO, hard_hit, 0.0)
+	var was_wheels := rb_wheels > 0
+	rb_wheels = wheels
+	grounded = wheels > 0
+	if grounded and not was_wheels:
+		_land(hard_hit)
+	# engine and wheels with nothing to push against
+	steer = move_toward(steer, -in_steer * MAX_STEER * 0.8, 4.0 * dt)
+	var thr := in_throttle if gear != -1 else in_brake
+	rpm = move_toward(rpm, lerpf(IDLE + 1500.0, REDLINE, thr), 9000.0 * dt)
+	rear_slide = 0.0
+	wr = lerpf(wr, rpm / 9.549 / (GEARS[max(gear, 1)] * FINAL), min(1.0, dt * 5.0))
 
 # Ground height a wheel of radius WHEEL_R actually rides on: the tyre touches a
 # step or kerb before its centre is over it, so edges become short ramps.
@@ -484,12 +680,6 @@ func _step_body(dt: float) -> void:
 	var omega: Vector3 = pitch_ax * pitch_rate + bas.z * roll_rate + Vector3.UP * yaw_rate
 	var fy := -MASS * G
 	var torque := Vector3.ZERO
-	# gravity pulls at the centre of mass, not at road level: that's what lets a
-	# car lie on its side or roof. Faded in with the tilt so the normal handling
-	# (tuned without it) is untouched while the wheels are down.
-	var tilt_k := clampf((0.85 - bas.y.y) / 0.35, 0.0, 1.0)
-	if tilt_k > 0.0:
-		torque += (bas * Vector3(0.0, H_CG, 0.0)).cross(Vector3(0.0, -MASS * G, 0.0)) * tilt_k
 	var n_contact := 0
 	var was_grounded := grounded
 	var hub_scrape := 0.0

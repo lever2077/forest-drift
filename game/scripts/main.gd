@@ -351,6 +351,18 @@ func _build_start_screen(args: Array) -> void:
 					hud.cache_result = Profile.open_cache("basic")
 					hud._fill_shop_panel(hud.cache_panel)
 				"inventory": hud._toggle_shop_panel(hud.inventory_panel)
+				"players": hud._toggle_shop_panel(hud.players_panel)
+				"playerstest":   # adds a player, switches back and forth, then shows the panel
+					print("PLAYERS before: %s current=%s points=%d" % [str(Profile.players), Profile.player, Profile.points])
+					print("  create dup: '%s'" % Profile.create_player(Profile.player))
+					print("  create ZZ Test: '%s' -> current=%s points=%d skin=%s" % [Profile.create_player("ZZ Test"), Profile.player, Profile.points, Profile.equipped_skin])
+					Profile.add_points(123)
+					Profile.switch_player(Profile.players[0])
+					print("  back to %s: points=%d" % [Profile.player, Profile.points])
+					Profile.switch_player("ZZ Test")
+					print("  ZZ Test again: points=%d" % Profile.points)
+					hud._refresh_points()
+					hud._toggle_shop_panel(hud.players_panel)
 				"settings": hud.toggle_settings()
 				"audio":
 					hud.toggle_settings()
@@ -470,7 +482,26 @@ func _flip_test() -> void:
 		["side, sliding 60", 0.0, -PI / 2, 60.0, 0.0, 0.0],
 		["roof, sliding+spin", 0.0, PI, 50.0, 2.5, 0.0],
 		["rollover at 80", 0.0, 0.0, 80.0, 0.0, 7.0],
+		["roof drop from 3 m", 0.0, PI, 0.0, 0.0, 0.0],
 	]
+	# mid-air tumble: with nothing touching, angular momentum must stay the same
+	# (a real spinning body), however the car turns over
+	car.reset_on_track()
+	await get_tree().create_timer(0.3).timeout
+	car.global_position.y += 40.0
+	car.pitch_rate = 1.5
+	car.roll_rate = 3.0
+	car.yaw_rate = 1.0
+	car.grounded = false
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	var L0: Vector3 = car.rb_basis * ((car.rb_basis.transposed() * car.rb_w) * Vector3(car.I_PITCH, car.IZ, car.I_ROLL))
+	var Lmax := 0.0
+	for k in 120:   # 1 s of free flight
+		await get_tree().physics_frame
+		var Lk: Vector3 = car.rb_basis * ((car.rb_basis.transposed() * car.rb_w) * Vector3(car.I_PITCH, car.IZ, car.I_ROLL))
+		Lmax = max(Lmax, (Lk - L0).length())
+	print("AIR tumble: rigid=%s, angular momentum %.0f, drifted at most %.2f%% over 1 s" % [car.rigid, L0.length(), Lmax / L0.length() * 100.0])
 	for c in cases:
 		await get_tree().create_timer(0.5).timeout
 		car.reset_on_track()
@@ -482,7 +513,7 @@ func _flip_test() -> void:
 		car.vy = 0.0
 		car.vel = fw * float(c[3]) / 3.6
 		car.yaw_rate = c[4]
-		car.global_position.y += 1.2
+		car.global_position.y += 3.0 if String(c[0]).contains("drop") else 1.2
 		car.in_throttle = 0.0
 		var t := 0.0
 		var log_t := 0.0
@@ -491,6 +522,8 @@ func _flip_test() -> void:
 		var yaw_late := 0.0
 		var ang_late := 0.0
 		var pr0 := Vector2.ZERO
+		var q0 := Quaternion.IDENTITY
+		var p0 := Vector3.ZERO
 		while t < 6.0:
 			await get_tree().physics_frame
 			var dt := get_physics_process_delta_time()
@@ -501,24 +534,26 @@ func _flip_test() -> void:
 			# gap between the lowest corner of the body and the ground
 			var b: Basis = car._body_basis()
 			var low := 1e9
-			for cp in car.CHASSIS_PTS:
+			for cp in car.HULL_PTS:
 				var wp: Vector3 = car.global_position + b * (cp as Vector3)
 				low = min(low, wp.y - track.ground_h(wp.x, wp.z))
 			for wl in car.WHEEL_LOCAL:
 				var wp2: Vector3 = car.global_position + b * ((wl as Vector3) + Vector3(0, -car.c0[0], 0))
 				low = min(low, wp2.y - track.ground_h(wp2.x, wp2.z))
 			if t > 3.0:
+				# true rotation (angle between orientations) and distance moved since 3 s
 				if pr0 == Vector2.ZERO:
-					pr0 = Vector2(car.pitch, car.roll)
-					yaw0 = car.yaw
+					pr0 = Vector2.ONE
+					q0 = b.get_rotation_quaternion()
+					p0 = car.global_position
 				max_gap_late = max(max_gap_late, low)
-				yaw_late = abs(car.yaw - yaw0)
-				ang_late = max(ang_late, Vector2(car.pitch, car.roll).distance_to(pr0))
+				ang_late = max(ang_late, q0.angle_to(b.get_rotation_quaternion()))
+				yaw_late = max(yaw_late, (car.global_position - p0).length())
 			log_t += dt
 			if log_t >= 0.5 and "--verbose" in OS.get_cmdline_user_args():
 				log_t = 0.0
 				print("   t=%.1f gap=%.2f pitch=%.0f roll=%.0f yawrate=%.2f v=%.1f vy=%.2f grounded=%s" % [t, low, rad_to_deg(car.pitch), rad_to_deg(car.roll), car.yaw_rate, car.speed * 3.6, car.vy, car.grounded])
-		print("FLIP %-20s after 3 s: max gap %.2f m, turned %.0f deg, tilt moved %.0f deg, speed %.1f km/h, up.y=%.2f" % [c[0], max_gap_late, rad_to_deg(yaw_late), rad_to_deg(ang_late), car.speed * 3.6, car._body_basis().y.y])
+		print("FLIP %-20s after 3 s: max gap %.2f m, moved %.2f m, rotated %.1f deg, speed %.1f km/h, up.y=%.2f" % [c[0], max_gap_late, yaw_late, rad_to_deg(ang_late), car.speed * 3.6, car._body_basis().y.y])
 	get_tree().quit()
 
 # drives off the road edge and back on at a given speed and logs body motion

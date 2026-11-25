@@ -19,7 +19,22 @@ driven at 75 km/h (`PAR_SPEED` in `car.gd`). Endless Road pays out the same way 
 **Caches** on the start screen. The **Basic Cache** costs 100 points and gives one random solid-colour car skin
 (10 colours, equal odds; duplicates stack). Skins go into your **Inventory**, where **Equip** puts one on your car.
 The stock gloss black is always there. Skins and caches are defined in `SKINS` and `CACHES` in
-`game/scripts/profile.gd`. Points, items and your equipped skin are saved in `user://profile.cfg`.
+`game/scripts/profile.gd`.
+
+**Players:** several people can share one computer. The **Players** button next to the points on the start
+screen switches player or adds a new one, and each player has their own points, skins and equipped car colour.
+Saves are in `user://players/<name>.cfg`, and `user://players.cfg` remembers who played last. A save from before
+profiles is moved into "Player 1" automatically.
+
+## Tumbling, rollovers and roof landings
+When all four wheels leave the ground, or the car tips past about 45°, it becomes a free rigid body
+(`_step_rigid` in `car.gd`). It spins about its centre of mass with its own inertia (Euler's equations), so a
+tumble keeps its angular momentum in the air instead of twisting. Its shell is a set of contact points: the
+bumpers, wings, door sides, pillars and roof. Every point that touches the ground pushes back like crumpling
+metal, which is stiff going in and barely springs back, and drags along the ground with friction. So a roof or
+side landing slows, turns and settles the car by itself, and it stays on its side or roof until you press **R**.
+Once three wheels are back down and it's upright, the normal driving model takes over again.
+`--fliptest` runs the side, roof, slide, rollover and mid-air spin checks.
 
 ## Releasing an update (for the developer)
 1. Bump `VERSION` in `game/scripts/updater.gd` (for example `1.0.0` to `1.0.1`).

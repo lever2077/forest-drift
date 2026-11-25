@@ -7,6 +7,7 @@ var smooth_dir := Vector3.FORWARD
 var orbit := 0.0
 var orbit_pitch := 0.0
 var dragging := false
+var base_fov := 70.0     # the view without the crash kick
 
 const DRIVER_EYE := Vector3(-0.37, 1.07, 0.36)
 
@@ -55,14 +56,15 @@ func _process(delta: float) -> void:
 			pos.y = max(pos.y, gh)
 			global_position = global_position.lerp(pos, min(1.0, delta * 9.0))
 			look_at(target + smooth_dir * 2.0, Vector3.UP)
-			fov = lerpf(fov, 68.0 + clampf(spd * 0.25, 0.0, 16.0), min(1.0, delta * 2.0))
+			base_fov = lerpf(base_fov, 68.0 + clampf(spd * 0.25, 0.0, 16.0), min(1.0, delta * 2.0))
 		1:
 			global_transform = Transform3D(ct.basis, ct * Vector3(0, 1.02, -0.6))
-			fov = 75.0
+			base_fov = 75.0
 		2:
 			var b: Basis = car.model.body.global_transform.basis
 			global_transform = Transform3D(b, car.model.body.global_transform * DRIVER_EYE)
-			fov = 72.0
+			base_fov = 72.0
+	fov = base_fov
 	# crash shake: a sharp jolt that dies away (strongest from inside the car)
 	var s: float = car.shake
 	if s > 0.001:
@@ -71,4 +73,6 @@ func _process(delta: float) -> void:
 		global_position += Vector3(sin(t * 61.0) + sin(t * 23.0) * 0.5, sin(t * 53.0 + 1.3), sin(t * 47.0 + 2.1)) * k
 		rotate_object_local(Vector3.FORWARD, sin(t * 37.0) * s * s * 0.05)
 		rotate_object_local(Vector3.RIGHT, sin(t * 43.0 + 0.7) * s * s * 0.03)
-		fov += s * 6.0
+		# a small kick on top of the normal view (it used to add up every frame
+		# and zoom far out on a big crash)
+		fov = base_fov + s * 1.5

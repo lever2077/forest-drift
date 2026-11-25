@@ -1,9 +1,16 @@
-# Player profile: points, the items you own and the skin on your car.
-# Saved to user://profile.cfg (separate from settings.cfg). Everything is static
-# so it survives the scene reloads between the menu and the maps.
+# Player profiles: each player on this computer has their own points, items and
+# car skin, saved to user://players/<name>.cfg. user://players.cfg lists the
+# players and who played last. Everything is static so it survives the scene
+# reloads between the menu and the maps.
 extends RefCounted
 
-static var PATH := "user://profile.cfg"   # dev aid: --profile=<file> uses another file
+const INDEX_PATH := "user://players.cfg"
+const OLD_PATH := "user://profile.cfg"     # the single save from before profiles
+const MAX_NAME := 16
+static var PATH := ""                      # the current player's save file
+static var player := ""                    # the current player's name
+static var players: Array = []             # every player on this computer
+static var dev_path := ""                  # dev aid: --profile=<file> uses that file only
 
 # ---------------------------------------------------------------- skins
 # Every skin, by item id. "color" is the car's paint. The stock skin is always
@@ -42,13 +49,77 @@ static var inventory := {}     # item id -> count
 static var equipped_skin := STOCK_SKIN
 static var _loaded := false
 
+static func _file_for(name: String) -> String:
+	# keep only file-safe characters; the name itself is stored in the index
+	var safe := ""
+	for ch in name:
+		safe += ch if (ch.is_valid_identifier() or ch.is_valid_int()) else "_"
+	return "user://players/%s.cfg" % safe
+
+static func _load_index() -> void:
+	DirAccess.make_dir_recursive_absolute("user://players")
+	var cf := ConfigFile.new()
+	if cf.load(INDEX_PATH) == OK:
+		players = Array(cf.get_value("players", "list", []))
+		player = String(cf.get_value("players", "current", ""))
+	if players.is_empty():
+		# first run with profiles: the old single save becomes "Player 1"
+		players = ["Player 1"]
+		player = "Player 1"
+		if FileAccess.file_exists(OLD_PATH) and not FileAccess.file_exists(_file_for(player)):
+			DirAccess.copy_absolute(OLD_PATH, _file_for(player))
+		_save_index()
+	if not players.has(player):
+		player = players[0]
+
+static func _save_index() -> void:
+	var cf := ConfigFile.new()
+	cf.set_value("players", "list", players)
+	cf.set_value("players", "current", player)
+	cf.save(INDEX_PATH)
+
+# make `name` the current player (their save is loaded on the next access)
+static func switch_player(name: String) -> void:
+	load_profile()
+	if not players.has(name) or dev_path != "":
+		return
+	player = name
+	_save_index()
+	_loaded = false
+	load_profile()
+
+# add a new player with an empty save and switch to them; "" if OK, else the reason
+static func create_player(name: String) -> String:
+	load_profile()
+	name = name.strip_edges()
+	if name == "":
+		return "Type a name first"
+	if name.length() > MAX_NAME:
+		return "Names can be up to %d characters" % MAX_NAME
+	for p in players:
+		if String(p).to_lower() == name.to_lower() or _file_for(p) == _file_for(name):
+			return "That name is taken"
+	players.append(name)
+	switch_player(name)
+	return ""
+
 static func load_profile() -> void:
 	if _loaded:
 		return
 	_loaded = true
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--profile="):
-			PATH = a.substr(10)
+			dev_path = a.substr(10)
+	if dev_path != "":
+		PATH = dev_path
+		player = "Test"
+		players = ["Test"]
+	else:
+		_load_index()
+		PATH = _file_for(player)
+	points = 0
+	inventory = {}
+	equipped_skin = STOCK_SKIN
 	var cf := ConfigFile.new()
 	if cf.load(PATH) == OK:
 		points = int(cf.get_value("profile", "points", 0))
