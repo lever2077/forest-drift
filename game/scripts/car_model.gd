@@ -22,6 +22,7 @@ var body: Node3D          # everything that rolls/pitches with suspension
 var wheels: Array = []    # each: {"pivot": Node3D, "spin": Node3D, "left": bool, "front": bool}
 var steering_wheel: Node3D
 var wheel_override := NAN   # VR: steering wheel angle set by the hands holding it
+var driver_eye := Vector3(-0.37, 1.07, 0.36)   # where the driver's eyes are (body local)
 var tail_mat: StandardMaterial3D
 var head_mat: StandardMaterial3D
 var head_lights: Array[SpotLight3D] = []

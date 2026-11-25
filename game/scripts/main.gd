@@ -258,6 +258,11 @@ func _ready() -> void:
 	grass.setup(track, 0.6 if vr else 1.0, grass_quality)
 	car = Car.new()
 	car.name = "Car"
+	var car_id := Profile.equipped_car
+	for a in args:   # dev aid: --car=car_cc96_2
+		if a.begins_with("--car="):
+			car_id = a.substr(6)
+	car.car_def = Profile.CARS.get(car_id, Profile.CARS[Profile.STOCK_CAR])   # Inventory > Cars
 	add_child(car)
 	car.setup(track, forest, self)
 	car.model.position.z = 0.05   # put the CG between the axles
@@ -1451,7 +1456,7 @@ var vr_scroll_t := 0.0
 var sim_grip := {}   # dev aid: controller -> fake grip value (no headset)
 
 func _setup_vr() -> void:
-	_make_xr_rig(car.model.body, Vector3(-0.37, 1.07, 0.36), false)
+	_make_xr_rig(car.model.body, car.model.driver_eye, false)
 	car.model.set_mirrors_active.call_deferred(true)
 	if "--vrgrabtest" in OS.get_cmdline_user_args():
 		_vr_grab_test()

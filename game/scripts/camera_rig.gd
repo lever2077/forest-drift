@@ -64,7 +64,7 @@ func _process(delta: float) -> void:
 			base_fov = 75.0
 		2:
 			var b: Basis = car.model.body.global_transform.basis
-			global_transform = Transform3D(b, car.model.body.global_transform * DRIVER_EYE)
+			global_transform = Transform3D(b, car.model.body.global_transform * car.model.driver_eye)
 			base_fov = 72.0
 	fov = base_fov
 	# crash shake: a sharp jolt that dies away (strongest from inside the car)

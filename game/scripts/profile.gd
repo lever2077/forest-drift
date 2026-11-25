@@ -41,6 +41,25 @@ const CACHES := [
 	},
 ]
 
+# ---------------------------------------------------------------- cars
+# Every car you can drive (Inventory > Cars). "model" picks the visual model:
+# "" = the built-in 350Z, otherwise the downloaded body kit + rims in
+# res://models/cars/. All cars use the same driving physics.
+const STOCK_CAR := "car_350z"
+const CARS := {
+	"car_350z": {"name": "350Z Nismo (original)", "info": "the built-in car, full damage model", "model": ""},
+	"car_cc96_1": {"name": "CC96 - Street", "info": "IceMaan CC96, body kit 1, rims 1", "model": "cc96", "body": 1, "rims": 1, "spoiler": false},
+	"car_cc96_2": {"name": "CC96 - Sport", "info": "IceMaan CC96, body kit 2, rims 2, spoiler", "model": "cc96", "body": 2, "rims": 2, "spoiler": true},
+	"car_cc96_3": {"name": "CC96 - Race", "info": "IceMaan CC96, body kit 3, rims 3, spoiler", "model": "cc96", "body": 3, "rims": 3, "spoiler": true},
+}
+static var equipped_car := STOCK_CAR
+
+static func equip_car(id: String) -> void:
+	load_profile()
+	if CARS.has(id):
+		equipped_car = id
+		save_profile()
+
 static var points := 0
 static var inventory := {}     # item id -> count
 static var equipped_skin := STOCK_SKIN
@@ -82,6 +101,7 @@ static func load_profile() -> void:
 	points = 0
 	inventory = {}
 	equipped_skin = STOCK_SKIN
+	equipped_car = STOCK_CAR
 	var cf := ConfigFile.new()
 	if cf.load(PATH) == OK:
 		points = int(cf.get_value("profile", "points", 0))
@@ -90,12 +110,16 @@ static func load_profile() -> void:
 		equipped_skin = String(cf.get_value("profile", "skin", STOCK_SKIN))
 		if not owns(equipped_skin):
 			equipped_skin = STOCK_SKIN
+		equipped_car = String(cf.get_value("profile", "car", STOCK_CAR))
+		if not CARS.has(equipped_car):
+			equipped_car = STOCK_CAR
 
 static func save_profile() -> void:
 	var cf := ConfigFile.new()
 	cf.set_value("profile", "points", points)
 	cf.set_value("profile", "inventory", inventory)
 	cf.set_value("profile", "skin", equipped_skin)
+	cf.set_value("profile", "car", equipped_car)
 	cf.save(PATH)
 
 static func add_points(n: int) -> void:

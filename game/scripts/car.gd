@@ -3,6 +3,8 @@
 extends Node3D
 
 const CarModel = preload("res://scripts/car_model.gd")
+const CarModelExt = preload("res://scripts/car_model_ext.gd")
+var car_def := {}   # which car (profile.gd CARS entry); set before setup()
 const CrashAudio = preload("res://scripts/crash_audio.gd")
 const SmokeFx = preload("res://scripts/smoke_fx.gd")
 
@@ -189,7 +191,11 @@ var skid_last := [Vector3.INF, Vector3.INF]
 func setup(p_track, p_forest, fx_parent: Node3D) -> void:
 	track = p_track
 	forest = p_forest
-	model = CarModel.new()
+	if String(car_def.get("model", "")) != "":
+		model = CarModelExt.new()   # a downloaded car (same physics, its own look)
+		model.def = car_def
+	else:
+		model = CarModel.new()
 	add_child(model)
 	model.build()
 	_build_effects(fx_parent)

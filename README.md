@@ -246,6 +246,13 @@ You have gloved hands (`vr_hand.gd`); squeeze grip with a hand on the steering w
 it, then turn it like a real wheel (18:1 to the front wheels, less at speed; hand over hand works). Letting go hands the
 steering back to the thumbstick.
 
+**Cars:** Inventory > Cars picks what you drive: the original procedural 350Z, or the CC96 by IceMaan
+(CC0, `game/models/cars/cc96/`, FBX loaded at runtime) in three versions - Street (kit 1), Sport (kit 2 +
+wing) and Race (kit 3 + wing), each with its own rims. `car_model_ext.gd` builds a downloaded car and
+gives it the same wheels, steering wheel, VR hands, lights, brake lights, skins, dents and dash readout as
+the 350Z; all cars share the same physics. To add another car, add an entry to `CARS` in `profile.gd`.
+The VR hands are the CC0 glove model and animations from Godot XR Tools (`game/models/hands/`).
+
 **Mirrors:** both door mirrors and the rear-view mirror really work: each one renders what's behind
 from the mirror (flipped like a mirror). They only render from the driver's seat (cockpit view and VR),
 since each mirror draws the world again.

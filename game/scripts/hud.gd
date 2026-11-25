@@ -839,6 +839,43 @@ func _fill_shop_panel(p: PanelContainer) -> void:
 					_fill_shop_panel(p))
 			r.add_child(b)
 	else:
+		# tabs: Skins | Cars
+		var tabs := HBoxContainer.new()
+		tabs.alignment = BoxContainer.ALIGNMENT_CENTER
+		tabs.add_theme_constant_override("separation", 10)
+		list.add_child(tabs)
+		for ti in 2:
+			var tb := Button.new()
+			tb.text = ["Skins", "Cars"][ti]
+			tb.toggle_mode = true
+			tb.button_pressed = inv_tab == ti
+			tb.focus_mode = Control.FOCUS_NONE
+			tb.custom_minimum_size = Vector2(160, 40)
+			tb.add_theme_font_size_override("font_size", 20)
+			tb.pressed.connect(func():
+				inv_tab = ti
+				_fill_shop_panel(p))
+			tabs.add_child(tb)
+		list.add_child(HSeparator.new())
+		if inv_tab == 1:
+			# every car (all owned); the equipped one is what you drive next
+			for cid in Profile.CARS.keys():
+				var id: String = cid
+				var cd: Dictionary = Profile.CARS[id]
+				var r := _item_row(list, {"name": cd["name"], "info": cd["info"]}, "")
+				var b := Button.new()
+				var on: bool = Profile.equipped_car == id
+				b.text = "Driving" if on else "Drive"
+				b.disabled = on
+				b.focus_mode = Control.FOCUS_NONE
+				b.custom_minimum_size = Vector2(110, 0)
+				b.add_theme_font_size_override("font_size", 18)
+				b.pressed.connect(func():
+					Profile.equip_car(id)
+					_fill_shop_panel(p))
+				r.add_child(b)
+			_empty_note(list, "Your car is used on the next map you drive. Skins paint any car.")
+			return
 		# the stock skin first (always owned), then everything in the inventory
 		var ids := [Profile.STOCK_SKIN]
 		for id in Profile.inventory.keys():
@@ -864,6 +901,7 @@ func _fill_shop_panel(p: PanelContainer) -> void:
 			_empty_note(list, "Open caches to get more skins.")
 
 var cache_result := ""
+var inv_tab := 0   # Inventory: 0 skins, 1 cars
 
 # picture of a cache: a moulded plastic storage case with snap latches and a
 # carry handle, drawn in code. `tint` is the plastic colour so later caches can
