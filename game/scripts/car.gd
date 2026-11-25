@@ -851,7 +851,7 @@ func _step(dt: float) -> void:
 		target = clampf(target + align * k, -max_st, max_st)
 	var srate := (9.0 if in_analog else 4.0) * lerpf(0.8, 1.3, clampf(steer_k - 0.6, 0.0, 1.0))
 	if wheel_hold:
-		srate = 16.0
+		srate = 8.0   # the steering rack takes a moment to follow, like a real car
 	steer = move_toward(steer, target + steer_bias, srate * dt)
 
 	# ---- surface

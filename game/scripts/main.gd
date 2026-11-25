@@ -1275,7 +1275,7 @@ var xr_eye := Vector3.ZERO      # where the eyes should be, in xr_origin's paren
 var hands := {}                 # controller -> vr_hand.gd
 var grabs := {}                 # controller -> {"last", "acc", "w0", "rim"} while holding the wheel
 var grip_was := {}              # controller -> grip held last frame (a grab needs a fresh squeeze)
-const WHEEL_RATIO := 6.0        # steering wheel turns 6x the front wheels (matches car_model)
+const WHEEL_RATIO := 14.0       # steering ratio like a real car: wheel turns 14x the front wheels (matches car_model)
 const RIM_R := 0.18             # steering wheel rim radius (car_model)
 const VrHand = preload("res://scripts/vr_hand.gd")
 
@@ -1386,7 +1386,7 @@ func _vr_hands_tick() -> void:
 				hand.global_transform = pivot.global_transform * Transform3D(hb, rim_pt + hy * 0.028 + hz * 0.035)
 				hand.set_curl(1.0)
 				continue
-		hand.global_transform = xcon.global_transform * Transform3D(Basis(), Vector3(0, 0.01, 0.03))
+		hand.global_transform = xcon.global_transform * hand.grip_xf   # palm in, thumb up, like your real hand
 		hand.set_curl(grip, trig)
 	if car:
 		car.wheel_hold = not targets.is_empty()
@@ -1463,7 +1463,16 @@ func _vr_grab_test() -> void:
 		place.call(PI / 2 * (i + 1) / 30.0)
 		await get_tree().process_frame
 	await get_tree().create_timer(0.5).timeout
-	print("GRAB after a quarter turn left: wheel_target %.3f rad, front wheels %.3f rad, steering wheel %.0f deg" % [car.wheel_target, car.steer, rad_to_deg(car.model.steering_wheel.rotation.z)])
+	print("GRAB after a quarter turn left: wheel_target %.3f rad, front wheels %.1f deg, steering wheel %.0f deg" % [car.wheel_target, rad_to_deg(car.steer), rad_to_deg(car.model.steering_wheel.rotation.z)])
+	# free hands next to the wheel for the picture: left open, right in a fist
+	sim_grip = {xr_left: 0.0, xr_right: 0.0}
+	await get_tree().process_frame
+	for c in [xr_left, xr_right]:
+		var side := -1.0 if c == xr_left else 1.0
+		(c as Node3D).global_position = pivot.global_transform * Vector3(0.3 * side, 0.02, 0.12)
+		(c as Node3D).global_rotation = pivot.global_rotation
+	sim_grip = {xr_left: 0.0, xr_right: 0.6}
+	await get_tree().create_timer(0.2).timeout
 	await RenderingServer.frame_post_draw
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--grabshot="):

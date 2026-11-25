@@ -333,8 +333,8 @@ func ground_h(x: float, z: float) -> float:
 		return r.y + 0.04
 	if r.x < HALF_W + 1.4:
 		# gravel shoulder sloping gently down into the terrain (matches the mesh)
-		return max(r.y + 0.04 - 0.26 * (r.x - HALF_W) / 1.4, _terrain_from(x, z, r.x, r.y))
-	return _terrain_from(x, z, r.x, r.y)
+		return max(r.y + 0.04 - 0.26 * (r.x - HALF_W) / 1.4, surface_h(x, z))
+	return surface_h(x, z)   # the ground exactly as drawn, not the smooth formula
 
 func nearest_index(p: Vector3, hint: int, search := 40) -> int:
 	var n := pts.size()
@@ -422,7 +422,10 @@ func _make_materials() -> void:
 	Biome.apply_terrain(terrain_mat, biome)
 
 # ---------------------------------------------------------------- chunk building
-const OFFS := [0.0, 5.25, 6.65, 9.0, 13.0, 19.0, 27.0, 38.0, 52.0, 70.0, 95.0, 130.0, 175.0, 235.0, 310.0]
+# columns of the terrain strip, metres from the road centre: close together
+# where dunes / lumps can be seen up close so the ground isn't blocky
+const OFFS := [0.0, 5.25, 6.65, 9.0, 13.0, 17.0, 21.0, 25.0, 29.0, 33.0, 37.5, 42.0, 47.0, 52.0, 58.0, 64.0,
+	71.0, 79.0, 88.0, 98.0, 110.0, 124.0, 140.0, 158.0, 180.0, 205.0, 235.0, 270.0, 310.0]
 
 func _build_chunk(c: int) -> void:
 	var node := Node3D.new()

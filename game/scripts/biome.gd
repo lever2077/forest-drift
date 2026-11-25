@@ -37,7 +37,7 @@ static func get_biome(name: String) -> Dictionary:
 			b.merge({"name": name, "g_dark": Color(0.62, 0.46, 0.29), "g_lite": Color(0.80, 0.63, 0.41),
 				"g_litter": Color(0.68, 0.52, 0.34), "litter_k": 0.35, "g_dirt": Color(0.6, 0.48, 0.33),
 				"ripples": 1.0, "shoulder": Color(1.3, 1.15, 0.92),
-				"bump_amp": 8.0, "bump_freq": 0.011, "bump_ridged": true,
+				"bump_amp": 7.0, "bump_freq": 0.009, "bump_ridged": true, "bump_soft": 0.035, "bump_octaves": 2,
 				"tree_k": 0.0, "bush_k": 0.2, "leaf_tint": Color(0.75, 0.62, 0.35),
 				"grass_k": 0.1, "grass_h": 0.6, "grass_base": Color(0.3, 0.24, 0.12),
 				"grass_tip_a": Color(0.55, 0.45, 0.25), "grass_tip_b": Color(0.62, 0.52, 0.3),
@@ -81,11 +81,14 @@ static func extra_height(b: Dictionary, x: float, z: float, d: float) -> float:
 	if _noise == null:
 		_noise = FastNoiseLite.new()
 		_noise.seed = 404
-		_noise.fractal_octaves = 3
+	_noise.fractal_octaves = int(b.get("bump_octaves", 3))
 	_noise.frequency = b["bump_freq"]
 	var n := _noise.get_noise_2d(x, z)
 	if b["bump_ridged"]:
-		n = 1.0 - abs(n) * 2.0      # sharp crests like dunes / rock ridges
+		# crests like dunes / rock ridges; bump_soft rounds the crest off instead
+		# of a sharp crease (sqrt(n^2 + s) is a smooth |n|)
+		var soft: float = b.get("bump_soft", 0.0)
+		n = 1.0 - sqrt(n * n + soft) * 2.0
 		n = n * n * 0.9 - 0.2
 	var k := clampf((d - 22.0) / 40.0, 0.0, 1.0)
 	return n * amp * k * k * (3.0 - 2.0 * k)

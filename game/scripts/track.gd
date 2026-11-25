@@ -284,7 +284,9 @@ func terrain_h(x: float, z: float) -> float:
 	var t := sstep(HALF_W + 1.0, HALF_W + blend_far, d)
 	return lerpf(rh - 0.15, base, t)
 
-# height the car drives on
+# height the car drives on: the road, or the ground exactly as it's drawn (the
+# terrain mesh is 5 m triangles, so the smooth formula could be a metre off on
+# dunes and lumps - you'd float above it or sink into it)
 func ground_h(x: float, z: float) -> float:
 	var d := road_dist(x, z)
 	if d < HALF_W:
@@ -292,8 +294,8 @@ func ground_h(x: float, z: float) -> float:
 	if d < HALF_W + 1.4:
 		# gravel shoulder sloping gently down into the terrain (matches the mesh)
 		var sh := road_h(x, z) + 0.04 - 0.26 * (d - HALF_W) / 1.4
-		return max(sh, terrain_h(x, z))
-	return terrain_h(x, z)
+		return max(sh, surface_h(x, z))
+	return surface_h(x, z)
 
 func nearest_index(p: Vector3, hint: int, search := 40) -> int:
 	var cnt := pts.size()
@@ -435,7 +437,7 @@ func surface_h(x: float, z: float) -> float:
 	return hd + (hc - hd) * (1.0 - fx) + (hb - hd) * (1.0 - fz)
 
 func _build_terrain() -> void:
-	var step := 5.0
+	var step := 2.5   # was 5 m: dunes and lumps looked blocky
 	var nx := int((T_MAX.x - T_MIN.x) / step) + 1
 	var nz := int((T_MAX.y - T_MIN.y) / step) + 1
 	var verts := PackedVector3Array()

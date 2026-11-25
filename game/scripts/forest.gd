@@ -371,7 +371,7 @@ func _scatter() -> void:
 					chunks[key] = {"t": tl, "b": []}
 				var v := rng.randi() % VARIANTS
 				var s := rng.randf_range(0.8, 1.25)
-				var h: float = track.terrain_h(px, pz)
+				var h: float = track.surface_h(px, pz) if track.has_method("surface_h") else track.terrain_h(px, pz)   # sit on the drawn ground
 				var basis := Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(s, s * rng.randf_range(0.92, 1.1), s))
 				chunks[key]["t"][v].append(Transform3D(basis, Vector3(px, h - 0.1, pz)))
 				var hk := Vector2i(int(floor(px / HCELL)), int(floor(pz / HCELL)))
@@ -391,7 +391,7 @@ func _scatter() -> void:
 							tl2.append([])
 						chunks[key2] = {"t": tl2, "b": []}
 					var bs := rng.randf_range(0.7, 1.5)
-					chunks[key2]["b"].append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(bs, bs * 0.8, bs)), Vector3(bx, track.terrain_h(bx, bz) - 0.1, bz)))
+					chunks[key2]["b"].append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(bs, bs * 0.8, bs)), Vector3(bx, (track.surface_h(bx, bz) if track.has_method("surface_h") else track.terrain_h(bx, bz)) - 0.1, bz)))
 			z += spacing
 		x += spacing
 	for key in chunks.keys():

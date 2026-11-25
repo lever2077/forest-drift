@@ -1530,7 +1530,7 @@ func update_visuals(steer: float, wheel_spin_f: float, wheel_spin_r: float, roll
 		pivot.rotation.z = lean + sin(spin_ang) * wheel_wobble[wj]
 		pivot.rotation.x = cos(spin_ang) * wheel_wobble[wj] * 0.6
 	if steering_wheel:
-		steering_wheel.rotation.z = steer * 12.0 * 0.5
+		steering_wheel.rotation.z = steer * 14.0   # 14:1 steering ratio (full lock ~1.6 turns)
 	body.rotation = Vector3(pitch, 0, roll)
 	if mirrors_on:
 		for m in mirrors:
