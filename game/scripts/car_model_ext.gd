@@ -31,12 +31,14 @@ func build() -> void:
 	if part == null:
 		push_warning("car model missing: " + CC96_DIR + "Body/CC96_Body_%d.fbx" % bi)
 		return
-	var shell_mesh: ArrayMesh = (part[0] as ArrayMesh).duplicate()
+	# baked into real car-space metres: the file stores the mesh at 1/100 scale
+	# with a x100 node scale, and the dent shader works in the mesh's own units -
+	# a small dent became 100x too big and threw the whole body out of sight
+	var shell_mesh := _bake(part[0], to_car * (part[1] as Transform3D))
 	_setup_materials(shell_mesh)
 	var shell_mi := MeshInstance3D.new()
 	shell_mi.name = "Shell"
 	shell_mi.mesh = shell_mesh
-	shell_mi.transform = to_car * (part[1] as Transform3D)
 	body.add_child(shell_mi)
 	if def.get("spoiler", false):
 		var sp = _part(CC96_DIR + "Spoiler/CC96_Spoiler.fbx")
@@ -170,6 +172,34 @@ func set_damage_enabled(on: bool, p_car = null) -> void:
 		return
 	_apply_dent_overrides(on)
 	repair()
+
+# a copy of mesh m with transform xf applied to its vertices, normals and tangents
+static func _bake(m: ArrayMesh, xf: Transform3D) -> ArrayMesh:
+	var out := ArrayMesh.new()
+	var nb := xf.basis.inverse().transposed()
+	for i in m.get_surface_count():
+		var arr := m.surface_get_arrays(i)
+		var v: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		for k in v.size():
+			v[k] = xf * v[k]
+		arr[Mesh.ARRAY_VERTEX] = v
+		if arr[Mesh.ARRAY_NORMAL] != null:
+			var n: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			for k in n.size():
+				n[k] = (nb * n[k]).normalized()
+			arr[Mesh.ARRAY_NORMAL] = n
+		if arr[Mesh.ARRAY_TANGENT] != null:
+			var t: PackedFloat32Array = arr[Mesh.ARRAY_TANGENT]
+			for k in range(0, t.size(), 4):
+				var tv := (xf.basis * Vector3(t[k], t[k + 1], t[k + 2])).normalized()
+				t[k] = tv.x
+				t[k + 1] = tv.y
+				t[k + 2] = tv.z
+			arr[Mesh.ARRAY_TANGENT] = t
+		out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+		out.surface_set_material(i, m.surface_get_material(i))
+		out.surface_set_name(i, m.surface_get_name(i))
+	return out
 
 # load a model file once (FBX parts come in as importer meshes)
 static func _part(path: String):

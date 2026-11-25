@@ -48,9 +48,7 @@ const CACHES := [
 const STOCK_CAR := "car_350z"
 const CARS := {
 	"car_350z": {"name": "350Z Nismo (original)", "info": "the built-in car, full damage model", "model": ""},
-	"car_cc96_1": {"name": "CC96 - Street", "info": "IceMaan CC96, body kit 1, rims 1", "model": "cc96", "body": 1, "rims": 1, "spoiler": false},
-	"car_cc96_2": {"name": "CC96 - Sport", "info": "IceMaan CC96, body kit 2, rims 2, spoiler", "model": "cc96", "body": 2, "rims": 2, "spoiler": true},
-	"car_cc96_3": {"name": "CC96 - Race", "info": "IceMaan CC96, body kit 3, rims 3, spoiler", "model": "cc96", "body": 3, "rims": 3, "spoiler": true},
+	"car_cc96_2": {"name": "CC96 Sport", "info": "IceMaan CC96 with a wing, dents but no breakable parts", "model": "cc96", "body": 2, "rims": 2, "spoiler": true},
 }
 static var equipped_car := STOCK_CAR
 
