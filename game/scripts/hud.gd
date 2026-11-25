@@ -35,7 +35,7 @@ const CONTROLS := {
 		["Handbrake", "Space"],
 		["Change camera  (chase / hood / cockpit)", "C"],
 		["Reset car onto the road", "R"],
-		["Restart from the start line (resets time, repairs damage)", "Backspace"],
+		["Repair the car (Endless Road: right where you are; other maps: back to the start line)", "Backspace"],
 		["Back to the map select screen", "Esc"],
 		["Headlights", "H"],
 		["Manual shift down / up", "Q  /  E"],

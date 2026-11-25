@@ -1409,6 +1409,7 @@ func set_damage_enabled(on: bool, p_car = null) -> void:
 				gm = gm.duplicate()
 				extra_mats.append(gm)
 			return gm)
+		damage.prewarm()
 	_apply_dent_overrides(on)
 	repair()
 
@@ -1562,12 +1563,14 @@ func add_dent(p: Vector3, push: Vector3, axis: Vector3, half_len: float, radius:
 			dn["h"] = min(max(dn["h"], depth) + (depth * 0.6 if fresh else 0.0), max(dn["r"], radius) * 0.6)
 			dn["r"] = max(dn["r"], radius)
 			dn["t"] = now
-			_upload_dents()
+			dents_dirty = true
 			return
 	if dents.size() >= MAX_DENTS:
 		dents.pop_front()   # oldest, smallest detail goes first
 	dents.append({"c": c, "u": u, "a": a, "L": half_len if a != Vector3.ZERO else 0.0, "r": radius, "h": depth, "t": now})
-	_upload_dents()
+	dents_dirty = true   # sent to the GPU once per frame (update_visuals), not per hit
+
+var dents_dirty := false
 
 func repair() -> void:
 	dents.clear()
@@ -1679,6 +1682,9 @@ func update_visuals(steer: float, wheel_spin_f: float, wheel_spin_r: float, roll
 		# 18:1 steering ratio; while VR hands hold it, it's where the hands put it
 		steering_wheel.rotation.z = wheel_override if not is_nan(wheel_override) else steer * 18.0
 	body.rotation = Vector3(pitch, 0, roll)
+	if dents_dirty:
+		dents_dirty = false
+		_upload_dents()
 	if mirrors_on:
 		for m in mirrors:
 			_place_mirror_cam(m)

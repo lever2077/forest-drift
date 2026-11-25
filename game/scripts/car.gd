@@ -255,6 +255,14 @@ func restart() -> void:
 func reset_on_track() -> void:
 	reset_to(track.nearest_index(global_position, track_idx))
 
+# Endless Road Backspace: fix everything and put the car back on the road right
+# where it is - the distance, score and run carry on
+func repair_here() -> void:
+	reset_on_track()
+	skid_last = [Vector3.INF, Vector3.INF]
+	model.repair()
+	repair_mech()
+
 # ---------------------------------------------------------------- physics
 static func pacejka(alpha: float, b: float, c: float) -> float:
 	return sin(c * atan(b * alpha))
@@ -365,7 +373,7 @@ func _update_mech(dt: float) -> void:
 		return
 	var dmg = model.damage
 	# keep reading the frame while a crush is still working its way through it
-	if mech_dirty or not dmg.obstacles.is_empty():
+	if mech_dirty or (not dmg.obstacles.is_empty() and Engine.get_physics_frames() % 3 == 0):
 		mech_dirty = false
 		if mech_wheels:
 			for i in 4:

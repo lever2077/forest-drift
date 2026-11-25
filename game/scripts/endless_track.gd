@@ -284,13 +284,24 @@ func _col_o(ri: int, k: int) -> float:
 	var lim := _row_limits(ri)
 	return min(o, lim.x) if o >= 0.0 else max(o, -lim.y)
 
-# the strip vertex (row ri, column k) exactly as _build_chunk makes it
+# the strip vertex (row ri, column k) exactly as _build_chunk makes it.
+# Cached: a crash checks the ground under ~30 points of the car every tick, and
+# each vertex costs a noise lookup.
+var _rv_cache := {}
 func _rib_vert(ri: int, k: int) -> Vector3:
+	var key := ri * 128 + k
+	var hit = _rv_cache.get(key)
+	if hit != null:
+		return hit
 	var p: Vector3 = pts[ri]
 	var l := Vector3(-tans[ri].z, 0, tans[ri].x)
 	var o := _col_o(ri, k)
 	var wp := Vector3(p.x, 0, p.z) + l * o
-	return Vector3(wp.x, _terrain_from(wp.x, wp.z, abs(o), p.y), wp.z)
+	var v := Vector3(wp.x, _terrain_from(wp.x, wp.z, abs(o), p.y), wp.z)
+	if _rv_cache.size() > 40000:
+		_rv_cache.clear()
+	_rv_cache[key] = v
+	return v
 
 static func _side(a: Vector3, b: Vector3, p: Vector3) -> float:
 	return (b.x - a.x) * (p.z - a.z) - (b.z - a.z) * (p.x - a.x)

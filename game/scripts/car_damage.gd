@@ -23,7 +23,7 @@ const NY := 3
 const NZ := 12
 const LMIN := Vector3(-0.9, 0.15, -2.2)
 const LSTEP := Vector3(0.6, 0.5, 0.4)
-const ITER := 4                  # relaxation passes per physics tick while active
+const ITER := 3                  # relaxation passes per physics tick while active
 
 var model                       # car_model.gd
 var car                         # car.gd
@@ -113,12 +113,25 @@ func repair_frame() -> void:
 func crush(kind: String, c: Vector3, a: Vector3, r: float, u: Vector3, depth: float) -> void:
 	if depth <= 0.005:
 		return
+	# a held contact (scraping, leaning on a tree) hits every tick: merge it into
+	# the matching crush shape instead of piling up dozens of them - that pile-up
+	# was the big frame-rate drop in crashes
+	for ob in obstacles:
+		if ob["kind"] == kind and (ob["c"] as Vector3).distance_to(c) < max(r, float(ob["r"])) * 0.6:
+			ob["d"] = max(float(ob["d"]), depth)
+			ob["t"] = min(int(ob["t"]), 3)
+			return
+	if obstacles.size() >= 4:
+		obstacles.pop_front()
 	obstacles.append({"kind": kind, "c": c, "a": a, "r": r, "u": u, "d": depth, "t": 0})
 
+var _tick := 0
 func _physics_process(_delta: float) -> void:
+	_tick += 1
 	if not obstacles.is_empty():
 		_relax()
-	if lattice_dirty:
+	# the crumple shape goes to the GPU every other tick (it's smoothed anyway)
+	if lattice_dirty and (_tick % 2 == 0 or obstacles.is_empty()):
 		lattice_dirty = false
 		_upload_lattice()
 	_update_parts(_delta)
@@ -194,7 +207,10 @@ func _relax() -> void:
 			still.append(ob)
 	obstacles = still
 	lattice_dirty = true
-	_from_frame()
+	# what the bending does to panels and glass: every third tick, and once the
+	# frame settles (it loops over every panel and window, so not every tick)
+	if _tick % 3 == 0 or obstacles.is_empty():
+		_from_frame()
 
 # parts and glass react to how bent the structure around them is: a panel on a
 # crushed section comes loose, then tears off; glass in a bent frame cracks,
@@ -270,11 +286,12 @@ func _upload_lattice() -> void:
 
 # how far the frame around a car-local point has been pushed
 func frame_disp_near(p: Vector3, radius: float) -> float:
-	var m := 0.0
+	var m2 := 0.0
+	var r2 := radius * radius
 	for i in rest.size():
-		if rest[i].distance_to(p) < radius:
-			m = max(m, (pos[i] - rest[i]).length())
-	return m
+		if rest[i].distance_squared_to(p) < r2:
+			m2 = max(m2, pos[i].distance_squared_to(rest[i]))
+	return sqrt(m2)
 
 # 0..1 per wheel: FL, FR, RL, RR
 func corner_damage(i: int) -> float:
@@ -708,10 +725,9 @@ func _hit_glass(lp: Vector3, lu: Vector3, vn: float, kind: String) -> void:
 		var hitk := 0.0
 		if d < reach:
 			hitk = max(vn - 3.0, 0.0) * 0.07 * (1.0 - d / reach)
-		# a bent frame cracks the glass too
+		# (a bent frame cracks the glass too - that's handled in _from_frame, not
+		# on every single hit)
 		var b: AABB = w["aabb"]
-		var frame := frame_disp_near(b.get_center(), b.size.length() * 0.6)
-		hitk = max(hitk, (frame - 0.06) * 3.0)
 		if hitk <= 0.0:
 			continue
 		w["health"] -= hitk
@@ -734,6 +750,43 @@ func _shatter(name: String, lu: Vector3) -> void:
 	mi.visible = false
 	if car.crash_audio:
 		car.crash_audio.glass(0.9)
+	_ensure_shards()
+	var ps := GPUParticles3D.new()
+	var pm: ParticleProcessMaterial = shard_mat.duplicate()
+	var b: AABB = w["aabb"]
+	pm.emission_box_extents = b.size * 0.5
+	var gt: Transform3D = mi.global_transform
+	pm.direction = (gt.basis * -lu).normalized() + Vector3(0, 0.3, 0)
+	ps.process_material = pm
+	ps.draw_pass_1 = shard_mesh
+	ps.amount = 120
+	ps.lifetime = 1.6
+	ps.one_shot = true
+	ps.explosiveness = 0.95
+	ps.local_coords = false
+	ps.visibility_aabb = AABB(Vector3(-6, -6, -6), Vector3(12, 12, 12))
+	car.get_parent().add_child(ps)
+	ps.global_position = gt * b.get_center()
+	ps.emitting = true
+	get_tree().create_timer(2.5).timeout.connect(ps.queue_free)
+
+# The glass shard particles' shaders compile the first time they're drawn,
+# which froze the game for a moment on the first window to break. Draw one
+# hidden shard when the car is set up so that happens at load time instead.
+func prewarm() -> void:
+	_ensure_shards()
+	var ps := GPUParticles3D.new()
+	ps.process_material = shard_mat
+	ps.draw_pass_1 = shard_mesh
+	ps.amount = 1
+	ps.lifetime = 0.2
+	ps.one_shot = true
+	add_child(ps)
+	ps.position = Vector3(0, -3, 0)     # under the car, out of sight
+	ps.emitting = true
+	get_tree().create_timer(1.0).timeout.connect(ps.queue_free)
+
+func _ensure_shards() -> void:
 	if shard_mat == null:
 		shard_mat = ParticleProcessMaterial.new()
 		shard_mat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
@@ -754,24 +807,6 @@ func _shatter(name: String, lu: Vector3) -> void:
 		sm.roughness = 0.05
 		sm.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
 		shard_mesh.material = sm
-	var ps := GPUParticles3D.new()
-	var pm: ParticleProcessMaterial = shard_mat.duplicate()
-	var b: AABB = w["aabb"]
-	pm.emission_box_extents = b.size * 0.5
-	var gt: Transform3D = mi.global_transform
-	pm.direction = (gt.basis * -lu).normalized() + Vector3(0, 0.3, 0)
-	ps.process_material = pm
-	ps.draw_pass_1 = shard_mesh
-	ps.amount = 180
-	ps.lifetime = 1.6
-	ps.one_shot = true
-	ps.explosiveness = 0.95
-	ps.local_coords = false
-	ps.visibility_aabb = AABB(Vector3(-6, -6, -6), Vector3(12, 12, 12))
-	car.get_parent().add_child(ps)
-	ps.global_position = gt * b.get_center()
-	ps.emitting = true
-	get_tree().create_timer(2.5).timeout.connect(ps.queue_free)
 
 # ======================================================================= repair
 func repair() -> void:

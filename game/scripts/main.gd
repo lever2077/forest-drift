@@ -901,9 +901,10 @@ var prof_stream_ms := 0.0     # time spent streaming the endless road this tick 
 
 # back to the start line with a fresh lap timer
 func _restart() -> void:
-	car.restart()
 	if track.endless:
-		track.update_stream(car.track_idx)
+		car.repair_here()   # Endless Road: repaired where you are, the run goes on
+		return
+	car.restart()
 
 # scripted inputs + telemetry, used to tune the physics
 func _drive_test() -> void:
