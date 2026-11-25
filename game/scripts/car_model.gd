@@ -280,6 +280,24 @@ func _make_materials() -> void:
 	gauge.emission_energy_multiplier = 0.6
 	mats["gauge"] = gauge
 
+	# interior extras: carpet, the radio display, gauge needles
+	var carpet := StandardMaterial3D.new()
+	carpet.albedo_color = Color(0.035, 0.035, 0.038)
+	carpet.roughness = 1.0
+	mats["carpet"] = carpet
+	var lcd := StandardMaterial3D.new()
+	lcd.albedo_color = Color(0.02, 0.03, 0.04)
+	lcd.emission_enabled = true
+	lcd.emission = Color(1.0, 0.5, 0.15)
+	lcd.emission_energy_multiplier = 0.9
+	mats["lcd"] = lcd
+	var needle := StandardMaterial3D.new()
+	needle.albedo_color = Color(1.0, 0.2, 0.1)
+	needle.emission_enabled = true
+	needle.emission = Color(1.0, 0.25, 0.1)
+	needle.emission_energy_multiplier = 1.2
+	mats["needle"] = needle
+
 	var plate := StandardMaterial3D.new()
 	plate.albedo_color = Color(0.93, 0.93, 0.9)
 	plate.roughness = 0.5
@@ -913,6 +931,114 @@ func _build_interior(mb) -> void:
 	mb.box("interior", Transform3D(Basis(Vector3.RIGHT, 0.2), L(Vector3(0, 0.62, -0.95))), Vector3(1.35, 0.7, 0.04))
 	mb.box("interior", Transform3D(Basis(), L(Vector3(0, 0.66, -1.4))), Vector3(1.3, 0.02, 0.8))
 	mb.box("interior", Transform3D(Basis(), L(Vector3(0, 1.262, -0.5))), Vector3(0.78, 0.012, 0.6))
+	_build_interior_details(mb)
+
+# the small things that make the cabin read as a real car interior
+func _build_interior_details(mb) -> void:
+	var dx := -0.37   # driver (left-hand drive)
+	var face_b := Basis(Vector3.RIGHT, PI / 2)   # cylinder axis along the car (towards the driver)
+	# ---- carpet and floor mats
+	mb.box("carpet", Transform3D(Basis(), L(Vector3(0, 0.233, -0.2))), Vector3(1.40, 0.006, 1.8))
+	for sx in [-0.37, 0.37]:
+		mb.box("interior", Transform3D(Basis(), L(Vector3(float(sx), 0.238, 0.2))), Vector3(0.46, 0.008, 0.5))
+		mb.box("accent", Transform3D(Basis(), L(Vector3(float(sx), 0.243, -0.03))), Vector3(0.46, 0.004, 0.02))
+	# ---- pedals (clutch, brake, throttle) and the dead pedal
+	for pd in [[-0.47, 0.075, 0.085], [-0.37, 0.085, 0.085], [-0.27, 0.05, 0.14]]:
+		var px: float = pd[0]
+		var pad_b := Basis(Vector3.RIGHT, 0.55)
+		mb.box("alu", Transform3D(pad_b, L(Vector3(px, 0.33, 0.6))), Vector3(float(pd[1]), float(pd[2]), 0.012))
+		for rib in [-0.02, 0.0, 0.02]:
+			mb.box("rubber", Transform3D(pad_b, L(Vector3(px, 0.33 + float(rib), 0.594))), Vector3(float(pd[1]) * 0.85, 0.006, 0.004))
+		mb.beam("trim", L(Vector3(px, 0.58, 0.68)), L(Vector3(px, 0.36, 0.615)), Vector3(0, 0, 1), 0.015, 0.015, 0.012, 0.012)
+	mb.box("alu", Transform3D(Basis(Vector3.RIGHT, 0.7), L(Vector3(-0.6, 0.31, 0.58))), Vector3(0.07, 0.16, 0.012))
+	# ---- dashboard: brow over the gauges, seam, glovebox
+	mb.box("interior", Transform3D(Basis(Vector3.RIGHT, -0.45), L(Vector3(dx, 0.94, 0.4))), Vector3(0.46, 0.022, 0.13))
+	mb.box("trim", Transform3D(Basis(), L(Vector3(0.12, 0.645, 0.302))), Vector3(1.0, 0.006, 0.006))
+	mb.box("interior", Transform3D(Basis(), L(Vector3(0.4, 0.55, 0.298))), Vector3(0.38, 0.15, 0.008))
+	mb.box("trim", Transform3D(Basis(), L(Vector3(0.4, 0.55, 0.294))), Vector3(0.36, 0.004, 0.004))
+	mb.box("alu", Transform3D(Basis(), L(Vector3(0.4, 0.6, 0.292))), Vector3(0.07, 0.014, 0.008))
+	# ---- round air vents (two in the middle, one at each end)
+	for v in [[-0.08, 0.7, 0.3], [0.08, 0.7, 0.3], [-0.62, 0.72, 0.31], [0.62, 0.72, 0.31]]:
+		var vp := L(Vector3(float(v[0]), float(v[1]), float(v[2])))
+		mb.torus("alu", Transform3D(face_b, vp), 0.034, 0.006, 20, 6)
+		mb.cylinder("trim", Transform3D(face_b, vp + Vector3(0, 0, 0.01)), 0.032, 0.032, 0.02, 16)
+		for k in 3:
+			mb.box("interior", Transform3D(Basis(), vp + Vector3(0, -0.018 + k * 0.018, -0.004)), Vector3(0.056, 0.004, 0.012))
+		mb.box("alu", Transform3D(Basis(), vp + Vector3(0, 0, -0.008)), Vector3(0.006, 0.05, 0.006))
+	# ---- centre stack: radio with display and buttons, climate knobs, hazard
+	var stack_b := Basis(Vector3.RIGHT, 0.3)
+	mb.box("trim", Transform3D(stack_b, L(Vector3(0, 0.63, 0.333))), Vector3(0.19, 0.06, 0.012))
+	mb.box("lcd", Transform3D(stack_b, L(Vector3(0, 0.638, 0.326))), Vector3(0.1, 0.022, 0.004))
+	for k in 6:
+		mb.box("alu", Transform3D(stack_b, L(Vector3(-0.075 + k * 0.03, 0.612, 0.33))), Vector3(0.018, 0.008, 0.006))
+	for k in 3:
+		var kp := L(Vector3(-0.065 + k * 0.065, 0.535, 0.36))
+		mb.cylinder("alu", Transform3D(stack_b * face_b, kp), 0.018, 0.018, 0.018, 18)
+		mb.box("accent", Transform3D(stack_b, kp + Vector3(0, 0.012, -0.01)), Vector3(0.003, 0.008, 0.003))
+	mb.box("red", Transform3D(stack_b, L(Vector3(0, 0.575, 0.345))), Vector3(0.025, 0.014, 0.006))
+	# ---- console: shift boot and surround, handbrake, cupholders, armrest
+	mb.ellipsoid("leather", Transform3D(Basis(), L(Vector3(0, 0.495, 0.05))), Vector3(0.05, 0.035, 0.06), 14, 8)
+	mb.torus("alu", Transform3D(Basis(), L(Vector3(0, 0.49, 0.05))), 0.058, 0.005, 20, 6)
+	mb.beam("interior", L(Vector3(0.11, 0.5, -0.24)), L(Vector3(0.11, 0.565, -0.02)), Vector3.UP, 0.03, 0.026, 0.03, 0.026)
+	mb.beam("leather", L(Vector3(0.11, 0.545, -0.1)), L(Vector3(0.11, 0.572, 0.0)), Vector3.UP, 0.034, 0.03, 0.034, 0.03)
+	mb.cylinder("chrome", Transform3D(face_b, L(Vector3(0.11, 0.575, 0.012))), 0.009, 0.009, 0.012, 10)
+	mb.box("trim", Transform3D(Basis(), L(Vector3(0.11, 0.497, -0.12))), Vector3(0.045, 0.004, 0.24))
+	for cz in [-0.1, -0.19]:
+		mb.cylinder("trim", Transform3D(Basis(), L(Vector3(-0.05, 0.527, float(cz)))), 0.034, 0.03, 0.01, 16)
+		mb.torus("alu", Transform3D(Basis(), L(Vector3(-0.05, 0.532, float(cz)))), 0.036, 0.004, 16, 5)
+	mb.box("leather", Transform3D(Basis(), L(Vector3(0, 0.565, -0.42))), Vector3(0.17, 0.06, 0.34))
+	for sx in [-0.07, 0.07]:
+		mb.box("accent", Transform3D(Basis(), L(Vector3(float(sx), 0.596, -0.42))), Vector3(0.004, 0.003, 0.32))
+	# ---- doors: armrest, pull, window switches, speaker, pocket, top roll
+	for side in [1.0, -1.0]:
+		var xo: float = 0.69 * side
+		mb.box("leather", Transform3D(Basis(), L(Vector3(xo - 0.01 * side, 0.58, -0.12))), Vector3(0.07, 0.04, 0.46))
+		mb.box("accent", Transform3D(Basis(), L(Vector3(xo - 0.045 * side, 0.6, -0.12))), Vector3(0.003, 0.003, 0.44))
+		mb.beam("trim", L(Vector3(xo - 0.04 * side, 0.6, 0.06)), L(Vector3(xo - 0.04 * side, 0.7, 0.14)), Vector3(side, 0, 0), 0.02, 0.02, 0.018, 0.018)
+		mb.box("trim", Transform3D(Basis(), L(Vector3(xo - 0.02 * side, 0.605, 0.07))), Vector3(0.05, 0.012, 0.09))
+		for k in 2:
+			mb.box("alu", Transform3D(Basis(), L(Vector3(xo - 0.02 * side, 0.613, 0.05 + k * 0.035))), Vector3(0.022, 0.006, 0.02))
+		var spk := L(Vector3(xo - 0.002 * side, 0.4, 0.22))
+		var side_b := Basis(Vector3.FORWARD, PI / 2)   # axis across the car
+		mb.cylinder("trim", Transform3D(side_b, spk), 0.07, 0.07, 0.01, 22)
+		mb.torus("alu", Transform3D(side_b, spk), 0.072, 0.005, 22, 5)
+		mb.ellipsoid("trim", Transform3D(side_b, spk - Vector3(0.006 * side, 0, 0)), Vector3(0.025, 0.012, 0.025), 10, 6)
+		mb.box("trim", Transform3D(Basis(), L(Vector3(xo - 0.015 * side, 0.32, -0.1))), Vector3(0.035, 0.08, 0.36))
+		mb.box("leather", Transform3D(Basis(), L(Vector3(xo + 0.005 * side, 0.85, -0.08))), Vector3(0.05, 0.03, 1.2))
+	# ---- seats: stitching, belts and buckles, recline levers
+	for sx in [-0.37, 0.37]:
+		var sxf: float = sx
+		var outer := -1.0 if sxf < 0.0 else 1.0
+		for ox in [-0.13, 0.13]:
+			mb.box("accent", Transform3D(Basis(Vector3.RIGHT, -0.08), L(Vector3(sxf + float(ox), 0.378, -0.38))), Vector3(0.004, 0.003, 0.46))
+			mb.box("accent", Transform3D(Basis(Vector3.RIGHT, 0.26), L(Vector3(sxf + float(ox), 0.68, -0.645))), Vector3(0.004, 0.62, 0.003))
+		mb.box("trim", Transform3D(Basis(), L(Vector3(sxf + 0.27 * outer, 0.3, -0.24))), Vector3(0.015, 0.025, 0.1))
+		# belt: from the pillar over the shoulder, across the chest to the buckle
+		var anchor := L(Vector3(sxf + 0.26 * outer, 1.12, -0.66))
+		var shoulder := L(Vector3(sxf + 0.17 * outer, 1.0, -0.6))
+		var hip := L(Vector3(sxf - 0.2 * outer, 0.43, -0.42))
+		mb.beam("trim", anchor, shoulder, Vector3(0, 0, 1), 0.045, 0.045, 0.004, 0.004)
+		mb.beam("trim", shoulder, hip, Vector3(0, 0, 1), 0.045, 0.045, 0.004, 0.004)
+		mb.box("chrome", Transform3D(Basis(), anchor), Vector3(0.03, 0.04, 0.012))
+		mb.box("trim", Transform3D(Basis(), L(Vector3(sxf - 0.25 * outer, 0.42, -0.42))), Vector3(0.03, 0.06, 0.025))
+		mb.box("chrome", Transform3D(Basis(), L(Vector3(sxf - 0.25 * outer, 0.45, -0.42))), Vector3(0.022, 0.02, 0.012))
+	# ---- headliner: sun visors, dome light, grab handle
+	for sx in [-0.36, 0.36]:
+		# folded up flat against the roof, behind the top of the windscreen
+		mb.box("interior", Transform3D(Basis(Vector3.RIGHT, 0.25), L(Vector3(float(sx), 1.235, -0.17))), Vector3(0.3, 0.012, 0.12))
+		mb.box("alu", Transform3D(Basis(), L(Vector3(float(sx) * 0.45, 1.245, -0.2))), Vector3(0.015, 0.008, 0.02))
+	mb.box("trim", Transform3D(Basis(), L(Vector3(0, 1.252, -0.32))), Vector3(0.14, 0.012, 0.07))
+	mb.box("alu", Transform3D(Basis(), L(Vector3(0, 1.245, -0.32))), Vector3(0.1, 0.004, 0.045))
+	mb.beam("trim", L(Vector3(0.58, 1.18, -0.2)), L(Vector3(0.58, 1.18, -0.45)), Vector3(1, -0.4, 0), 0.02, 0.02, 0.015, 0.015)
+	# ---- gauge needles (resting) in the driver's binnacle
+	for g in [[-0.09, 0.075], [0.07, 0.06], [0.17, 0.04]]:
+		var gp := L(Vector3(dx + float(g[0]), 0.86, 0.335))
+		var gb := Basis(Vector3.RIGHT, PI / 2 - 0.25)
+		var r: float = g[1]
+		for fy in [0.007, -0.007]:   # one of these is on the face you see
+			var nb := gb * Basis(Vector3.UP, -2.2)
+			mb.box("needle", Transform3D(nb, gp + nb * Vector3(r * 0.38, float(fy), 0)), Vector3(r * 0.8, 0.002, 0.004))
+			mb.cylinder("trim", Transform3D(gb, gp + gb * Vector3(0, float(fy), 0)), 0.008, 0.008, 0.004, 10)
 
 func _build_steering_wheel() -> void:
 	var pivot := Node3D.new()
@@ -931,6 +1057,13 @@ func _build_steering_wheel() -> void:
 		var dir := Vector3(cos(a), sin(a), 0)
 		mb.beam("interior", dir * 0.05, dir * 0.17, Vector3(0, 0, 1), 0.04, 0.03, 0.014, 0.012)
 	mb.box("accent", Transform3D(Basis(), Vector3(0, 0.18, 0)), Vector3(0.012, 0.02, 0.036))
+	# thumb grips at 9 and 3 with stitching, and a horn pad with a badge
+	for sgn in [-1.0, 1.0]:
+		var gp := Vector3(0.18 * float(sgn), 0, 0)
+		mb.ellipsoid("leather", Transform3D(face, gp), Vector3(0.022, 0.05, 0.022), 12, 8)
+		mb.box("accent", Transform3D(Basis(), gp + Vector3(0, 0, 0.021)), Vector3(0.003, 0.08, 0.003))
+	mb.box("interior", Transform3D(Basis(), Vector3(0, -0.005, 0.01)), Vector3(0.09, 0.07, 0.03))
+	mb.box("alu", Transform3D(Basis(), Vector3(0, -0.005, 0.027)), Vector3(0.03, 0.02, 0.004))
 	var mi := MeshInstance3D.new()
 	mi.mesh = mb.build(mats)
 	steering_wheel.add_child(mi)
@@ -944,6 +1077,17 @@ func _build_steering_wheel() -> void:
 	col.rotation = Vector3(PI / 2, 0, 0)
 	col.position = Vector3(0, 0, -0.17)
 	pivot.add_child(col)
+	# indicator and wiper stalks and the column shroud (they don't turn with the wheel)
+	var smb := MB.new()
+	smb.box("interior", Transform3D(Basis(), Vector3(0, -0.01, -0.09)), Vector3(0.11, 0.08, 0.1))
+	for sgn in [-1.0, 1.0]:
+		var a := Vector3(0.05 * float(sgn), 0.0, -0.07)
+		var b := Vector3(0.15 * float(sgn), 0.02, -0.05)
+		smb.beam("trim", a, b, Vector3.UP, 0.014, 0.01, 0.014, 0.01)
+		smb.cylinder("alu", Transform3D(Basis(Vector3.FORWARD, PI / 2), b), 0.008, 0.008, 0.02, 8)
+	var stalks := MeshInstance3D.new()
+	stalks.mesh = smb.build(mats)
+	pivot.add_child(stalks)
 
 func _build_labels() -> void:
 	for e in [[Vector3(0, 0.33, -2.158), 0.0], [Vector3(0, 0.60, 2.176), PI]]:
