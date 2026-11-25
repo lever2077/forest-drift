@@ -1301,7 +1301,7 @@ func _make_xr_rig(parent: Node3D, eye: Vector3, lasers: bool) -> void:
 	grabs.clear()
 	for c in [xr_left, xr_right]:
 		var xcon: XRController3D = c
-		xcon.pose = "aim" if lasers else "default"
+		xcon.pose = "aim"   # the hand model is made for the aim pose
 		var hand := VrHand.new()
 		xcon.add_child(hand)
 		hand.build(xcon == xr_left)
@@ -1357,8 +1357,11 @@ func _vr_hands_tick() -> void:
 		var trig := xcon.get_float("trigger")
 		var fresh: bool = grip > 0.6 and not grip_was.get(xcon, false)
 		grip_was[xcon] = grip > 0.6
+		var free_xf: Transform3D = xcon.global_transform * hand.grip_xf   # where the hand is in your real hand
 		if pivot:
-			var p := pivot.global_transform.affine_inverse() * xcon.global_position
+			# grab with the fist, not the controller's tip
+			var fist: Vector3 = free_xf * (hand.fist_local as Vector3)
+			var p: Vector3 = pivot.global_transform.affine_inverse() * fist
 			var ang := atan2(p.y, p.x)
 			if grabs.has(xcon) and grip < 0.35:
 				grabs.erase(xcon)
@@ -1381,12 +1384,15 @@ func _vr_hands_tick() -> void:
 				var hx := -tangent
 				var hz := (Vector3(0, 0, 1) + radial * 0.2).normalized()
 				var hy := hz.cross(hx)
-				var hb := Basis(hx, hy, hz)
-				var rim_pt := radial * RIM_R
-				hand.global_transform = pivot.global_transform * Transform3D(hb, rim_pt + hy * 0.028 + hz * 0.035)
+				# (hx/hy/hz are for a flat palm-down hand; the model is held on its
+				# side like a controller, so turn it back by the same quarter roll)
+				var s := 1.0 if xcon == xr_left else -1.0
+				var hb := Basis(hx, hy, hz) * Basis(Vector3(0, 0, 1), PI / 2 * s).inverse()
+				var rim_pt := radial * RIM_R + hz * 0.006
+				hand.global_transform = pivot.global_transform * Transform3D(hb, rim_pt - hb * hand.fist_local)
 				hand.set_curl(1.0)
 				continue
-		hand.global_transform = xcon.global_transform * hand.grip_xf   # palm in, thumb up, like your real hand
+		hand.global_transform = free_xf
 		hand.set_curl(grip, trig)
 	if car:
 		car.wheel_hold = not targets.is_empty()

@@ -1,0 +1,6 @@
+Hand_Glove_L.gltf, Hand_Glove_R.gltf and the hand animations in anims/
+come from Godot XR Tools (https://github.com/GodotVR/godot-xr-tools,
+addons/godot-xr-tools/hands).
+
+Hand models: by DigitalN8m4r3 (Miodrag Sejic), released CC0 1.0 (public domain).
+Godot XR Tools: MIT License, Copyright (c) 2018-2023 Bastiaan Olij and Contributors.
