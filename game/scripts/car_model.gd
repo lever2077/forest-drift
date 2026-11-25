@@ -1393,6 +1393,10 @@ var wheel_wobble := [0.0, 0.0, 0.0, 0.0]
 func set_paint(c: Color) -> void:
 	paint_color = c
 	(mats["paint"] as StandardMaterial3D).albedo_color = c
+	# with damage on the body draws with a shader copy of the paint: recolour that too
+	var dm = dent_mats.get(mats["paint"])
+	if dm is ShaderMaterial:
+		dm.set_shader_parameter("albedo", c)
 
 # wheel i (FL FR RL RR) has come off: hide the tyre + rim on the car (the
 # hub and brake caliper stay) and return a copy of it to throw

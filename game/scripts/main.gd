@@ -207,6 +207,7 @@ func _ready() -> void:
 	add_child(car)
 	car.setup(track, forest, self)
 	car.model.position.z = 0.05   # put the CG between the axles
+	car.model.set_paint(Profile.skin_color(Profile.equipped_skin))   # skin from the Inventory
 	car.set_mech_effects(car_effects)
 	car.set_mech_options(dmg_engine, dmg_wheels, wheels_fall)
 	if not test_mode:   # dev test runs don't pay into the real profile
@@ -343,6 +344,10 @@ func _build_start_screen(args: Array) -> void:
 		if a.begins_with("--openpanel="):
 			match a.substr(12):
 				"cache": hud._toggle_shop_panel(hud.cache_panel)
+				"opencache":
+					hud._toggle_shop_panel(hud.cache_panel)
+					hud.cache_result = Profile.open_cache("basic")
+					hud._fill_shop_panel(hud.cache_panel)
 				"inventory": hud._toggle_shop_panel(hud.inventory_panel)
 				"settings": hud.toggle_settings()
 				"audio":
@@ -847,6 +852,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			hud.start()
 		return
 	if car == null:
+		if hud and event.is_action_pressed("menu"):
+			hud.close_menu_panels()   # Esc on the start screen: back from a panel to the menu
 		return
 	if event.is_action_pressed("menu") or (event is InputEventJoypadButton and event.pressed and event.button_index == JOY_BUTTON_START):
 		_back_to_menu()

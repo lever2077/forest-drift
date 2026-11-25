@@ -12,12 +12,14 @@ tarmac drift setup: weight transfer, throttle control and the handbrake all matt
 says **Update to vX.Y.Z**. Click it, and the game downloads the update, installs it and restarts. Your settings,
 points and inventory are kept.
 
-## Points, Cache and Inventory
+## Points, Caches, skins and Inventory
 At the end of every lap, the score you earned in that lap (drifts and jumps) is multiplied by a **time bonus**
 and added to your **points**. The bonus is par time ÷ your lap time, between ×0.25 and ×3. Par is the lap length
 driven at 75 km/h (`PAR_SPEED` in `car.gd`). Endless Road pays out the same way every kilometre. Spend points in
-the **Cache** on the start screen; what you buy shows up in your **Inventory**. To put items on sale, add them to
-`CACHE_ITEMS` in `game/scripts/profile.gd`. Points and items are saved in `user://profile.cfg`.
+**Caches** on the start screen. The **Basic Cache** costs 100 points and gives one random solid-colour car skin
+(10 colours, equal odds; duplicates stack). Skins go into your **Inventory**, where **Equip** puts one on your car.
+The stock gloss black is always there. Skins and caches are defined in `SKINS` and `CACHES` in
+`game/scripts/profile.gd`. Points, items and your equipped skin are saved in `user://profile.cfg`.
 
 ## Releasing an update (for the developer)
 1. Bump `VERSION` in `game/scripts/updater.gd` (for example `1.0.0` to `1.0.1`).

@@ -450,16 +450,41 @@ func build_settings(p_envc, p_main) -> void:
 	_layout()
 
 func toggle_settings() -> void:
-	if settings_panel:
-		settings_panel.visible = not settings_panel.visible
-		settings_panel.move_to_front()   # above the start menu, or its tabs can't be clicked
-		_layout()
+	_toggle_panel(settings_panel)
 
 func toggle_controls() -> void:
-	if controls_panel:
-		controls_panel.visible = not controls_panel.visible
-		controls_panel.move_to_front()
-		_layout()
+	_toggle_panel(controls_panel)
+
+# On the start screen a panel replaces the menu (one at a time, the menu comes
+# back when it closes). While driving, panels just open over the HUD.
+func _toggle_panel(p: Control) -> void:
+	if p == null:
+		return
+	var want := not p.visible
+	if menu and want:
+		close_menu_panels()
+	p.visible = want
+	p.move_to_front()
+	_sync_menu()
+	_layout()
+
+func _menu_panels() -> Array:
+	return [settings_panel, controls_panel, cache_panel, inventory_panel].filter(func(x): return x != null)
+
+func close_menu_panels() -> void:
+	for x in _menu_panels():
+		x.visible = false
+	_sync_menu()
+
+func _sync_menu() -> void:
+	if menu == null or menu_busy:
+		return
+	var any := false
+	for x in _menu_panels():
+		any = any or x.visible
+	menu.visible = not any
+	if not any:
+		_refresh_points()
 
 # ---------------------------------------------------------------- start menu: pick a map
 signal map_picked(index: int)
@@ -528,7 +553,7 @@ func build_menu(entries: Array, current: int) -> void:
 	var row2 := _row(v)
 	row2.alignment = BoxContainer.ALIGNMENT_CENTER
 	var cache_btn := Button.new()
-	cache_btn.text = "Cache"
+	cache_btn.text = "Caches"
 	cache_btn.custom_minimum_size = Vector2(290, 44)
 	cache_btn.add_theme_font_size_override("font_size", 19)
 	cache_btn.pressed.connect(func(): _toggle_shop_panel(cache_panel))
@@ -569,7 +594,7 @@ func build_menu(entries: Array, current: int) -> void:
 			updater.check())
 	updater.check()
 	add_child(menu)
-	cache_panel = _build_shop_panel("CACHE")
+	cache_panel = _build_shop_panel("CACHES")
 	inventory_panel = _build_shop_panel("INVENTORY")
 	_layout()
 	if first_btn:
@@ -653,15 +678,10 @@ func _build_shop_panel(title_text: String) -> PanelContainer:
 func _toggle_shop_panel(p: PanelContainer) -> void:
 	if p == null:
 		return
-	var want := not p.visible
-	for other in [cache_panel, inventory_panel]:
-		if other:
-			other.visible = false
-	p.visible = want
-	p.move_to_front()
-	if want:
+	if not p.visible:
+		cache_result = ""
 		_fill_shop_panel(p)
-	_layout()
+	_toggle_panel(p)
 
 func _empty_note(list: VBoxContainer, text: String) -> void:
 	var l := Label.new()
@@ -697,31 +717,77 @@ func _fill_shop_panel(p: PanelContainer) -> void:
 	for c in list.get_children():
 		c.queue_free()
 	if p == cache_panel:
-		if Profile.CACHE_ITEMS.is_empty():
-			_empty_note(list, "Nothing for sale yet - check back later.")
-		for it in Profile.CACHE_ITEMS:
-			var id: String = it["id"]
-			var price := int(it["price"])
-			var owned := Profile.item_count(id)
-			var r := _item_row(list, it, "%d pts" % price + ("   (owned %d)" % owned if owned > 0 else ""))
+		# what the last cache gave you
+		if cache_result != "":
+			var res := HBoxContainer.new()
+			res.alignment = BoxContainer.ALIGNMENT_CENTER
+			res.add_theme_constant_override("separation", 12)
+			list.add_child(res)
+			res.add_child(_swatch(Profile.skin_color(cache_result), 34))
+			var rl := Label.new()
+			rl.text = "You got:  %s%s" % [Profile.item_name(cache_result), "   (duplicate)" if Profile.item_count(cache_result) > 1 else ""]
+			rl.add_theme_font_size_override("font_size", 24)
+			rl.add_theme_color_override("font_color", Color(0.6, 1.0, 0.6))
+			res.add_child(rl)
+			list.add_child(HSeparator.new())
+		if Profile.CACHES.is_empty():
+			_empty_note(list, "No caches yet - check back later.")
+		for c in Profile.CACHES:
+			var cid: String = c["id"]
+			var price := int(c["price"])
+			var names := []
+			for iid in c["items"]:
+				names.append(Profile.item_name(iid))
+			var r := _item_row(list, {"name": String(c["name"]).to_upper(), "info": "%s\nContains: %s" % [c["info"], ", ".join(names)]}, "%d pts" % price)
+			r.get_child(0).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			r.get_child(0).custom_minimum_size = Vector2(420, 0)
 			var b := Button.new()
-			b.text = "Buy"
+			b.text = "Open"
 			b.focus_mode = Control.FOCUS_NONE
-			b.custom_minimum_size = Vector2(90, 0)
-			b.add_theme_font_size_override("font_size", 18)
+			b.custom_minimum_size = Vector2(100, 44)
+			b.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			b.add_theme_font_size_override("font_size", 19)
 			b.disabled = Profile.points < price
+			b.tooltip_text = "" if not b.disabled else "Not enough points"
 			b.pressed.connect(func():
-				if Profile.buy(id):
+				var won := Profile.open_cache(cid)
+				if won != "":
+					cache_result = won
 					_fill_shop_panel(p))
 			r.add_child(b)
 	else:
-		if Profile.inventory.is_empty():
-			_empty_note(list, "Your inventory is empty. Earn points and spend them in the Cache.")
+		# the stock skin first (always owned), then everything in the inventory
+		var ids := [Profile.STOCK_SKIN]
 		for id in Profile.inventory.keys():
-			var it := Profile.find_item(id)
-			if it.is_empty():
-				it = {"id": id, "name": id}
-			_item_row(list, it, "x%d" % int(Profile.inventory[id]))
+			ids.append(id)
+		for id in ids:
+			var sid: String = id
+			var r := _item_row(list, {"name": Profile.item_name(sid)}, "" if sid == Profile.STOCK_SKIN else "x%d" % Profile.item_count(sid))
+			if Profile.SKINS.has(sid):
+				r.add_child(_swatch(Profile.skin_color(sid), 30))
+				r.move_child(r.get_child(r.get_child_count() - 1), 0)
+				var b := Button.new()
+				var on: bool = Profile.equipped_skin == sid
+				b.text = "Equipped" if on else "Equip"
+				b.disabled = on
+				b.focus_mode = Control.FOCUS_NONE
+				b.custom_minimum_size = Vector2(110, 0)
+				b.add_theme_font_size_override("font_size", 18)
+				b.pressed.connect(func():
+					Profile.equip_skin(sid)
+					_fill_shop_panel(p))
+				r.add_child(b)
+		if Profile.inventory.is_empty():
+			_empty_note(list, "Open caches to get more skins.")
+
+var cache_result := ""
+
+func _swatch(c: Color, s: float) -> ColorRect:
+	var cr := ColorRect.new()
+	cr.color = c
+	cr.custom_minimum_size = Vector2(s, s)
+	cr.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	return cr
 
 # start menu: the biome every map is dressed in (looks only, driving is the same)
 var menu_vbox: VBoxContainer
@@ -1014,6 +1080,8 @@ func _layout() -> void:
 	if settings_panel:
 		settings_panel.reset_size()
 		settings_panel.position = Vector2(24, vs.y - settings_panel.size.y - 24)
+		if menu:   # start screen: it takes the menu's place in the middle
+			settings_panel.position = (vs - settings_panel.size) * 0.5
 
 func toggle_help() -> void:
 	toggle_controls()
