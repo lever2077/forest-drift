@@ -403,18 +403,6 @@ func _build_start_screen(args: Array) -> void:
 					hud.cache_result = Profile.open_cache("basic")
 					hud._fill_shop_panel(hud.cache_panel)
 				"inventory": hud._toggle_shop_panel(hud.inventory_panel)
-				"players": hud._toggle_shop_panel(hud.players_panel)
-				"playerstest":   # adds a player, switches back and forth, then shows the panel
-					print("PLAYERS before: %s current=%s points=%d" % [str(Profile.players), Profile.player, Profile.points])
-					print("  create dup: '%s'" % Profile.create_player(Profile.player))
-					print("  create ZZ Test: '%s' -> current=%s points=%d skin=%s" % [Profile.create_player("ZZ Test"), Profile.player, Profile.points, Profile.equipped_skin])
-					Profile.add_points(123)
-					Profile.switch_player(Profile.players[0])
-					print("  back to %s: points=%d" % [Profile.player, Profile.points])
-					Profile.switch_player("ZZ Test")
-					print("  ZZ Test again: points=%d" % Profile.points)
-					hud._refresh_points()
-					hud._toggle_shop_panel(hud.players_panel)
 				"settings": hud.toggle_settings()
 				"graphics":
 					hud.toggle_settings()

@@ -518,7 +518,7 @@ func _toggle_panel(p: Control) -> void:
 	_layout()
 
 func _menu_panels() -> Array:
-	return [settings_panel, controls_panel, cache_panel, inventory_panel, players_panel].filter(func(x): return x != null)
+	return [settings_panel, controls_panel, cache_panel, inventory_panel].filter(func(x): return x != null)
 
 func close_menu_panels() -> void:
 	for x in _menu_panels():
@@ -619,14 +619,7 @@ func build_menu(entries: Array, current: int) -> void:
 	menu_points_lbl.add_theme_color_override("font_color", Color(1.0, 0.85, 0.35))
 	var prow := _row(v)
 	prow.alignment = BoxContainer.ALIGNMENT_CENTER
-	prow.add_theme_constant_override("separation", 24)
 	prow.add_child(menu_points_lbl)
-	var pbtn := Button.new()
-	pbtn.text = "Players"
-	pbtn.custom_minimum_size = Vector2(150, 36)
-	pbtn.add_theme_font_size_override("font_size", 17)
-	pbtn.pressed.connect(func(): _toggle_shop_panel(players_panel))
-	prow.add_child(pbtn)
 	_refresh_points()
 	# update button: checks GitHub on its own when the menu opens
 	var row3 := _row(v)
@@ -654,7 +647,6 @@ func build_menu(entries: Array, current: int) -> void:
 	add_child(menu)
 	cache_panel = _build_shop_panel("CACHES")
 	inventory_panel = _build_shop_panel("INVENTORY")
-	players_panel = _build_shop_panel("PLAYERS")
 	_layout()
 	if first_btn:
 		first_btn.grab_focus()
@@ -662,7 +654,6 @@ func build_menu(entries: Array, current: int) -> void:
 # ---------------------------------------------------------------- start menu: cache + inventory
 var cache_panel: PanelContainer
 var inventory_panel: PanelContainer
-var players_panel: PanelContainer
 var menu_points_lbl: Label
 var updater
 var update_btn: Button
@@ -684,62 +675,7 @@ func _on_update_status(text: String, can_install: bool) -> void:
 func _refresh_points() -> void:
 	Profile.load_profile()
 	if menu_points_lbl:
-		menu_points_lbl.text = "%s     POINTS  %d" % [Profile.player.to_upper(), Profile.points]
-
-# Players panel: everyone who plays on this computer, each with their own save
-var players_msg := ""
-
-func _fill_players(p: PanelContainer, list: VBoxContainer) -> void:
-	for nm in Profile.players:
-		var pname: String = nm
-		var r := HBoxContainer.new()
-		r.add_theme_constant_override("separation", 14)
-		list.add_child(r)
-		var l := Label.new()
-		var cur := pname == Profile.player
-		l.text = pname + ("   (playing)" if cur else "")
-		l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		l.add_theme_font_size_override("font_size", 20)
-		if cur:
-			l.add_theme_color_override("font_color", Color(0.6, 1.0, 0.6))
-		r.add_child(l)
-		var b := Button.new()
-		b.text = "Playing" if cur else "Play as"
-		b.disabled = cur
-		b.focus_mode = Control.FOCUS_NONE
-		b.custom_minimum_size = Vector2(120, 0)
-		b.add_theme_font_size_override("font_size", 18)
-		b.pressed.connect(func():
-			Profile.switch_player(pname)
-			players_msg = ""
-			_fill_shop_panel(p))
-		r.add_child(b)
-	list.add_child(HSeparator.new())
-	var add := HBoxContainer.new()
-	add.add_theme_constant_override("separation", 12)
-	list.add_child(add)
-	var edit := LineEdit.new()
-	edit.placeholder_text = "New player name"
-	edit.max_length = Profile.MAX_NAME
-	edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	edit.add_theme_font_size_override("font_size", 18)
-	add.add_child(edit)
-	var ab := Button.new()
-	ab.text = "Add player"
-	ab.custom_minimum_size = Vector2(140, 0)
-	ab.add_theme_font_size_override("font_size", 18)
-	add.add_child(ab)
-	var do_add := func(_t = ""):
-		var err := Profile.create_player(edit.text)
-		players_msg = err
-		_fill_shop_panel(p)
-	ab.pressed.connect(do_add)
-	edit.text_submitted.connect(do_add)
-	var note := Label.new()
-	note.text = players_msg if players_msg != "" else "Each player has their own points, skins and car colour."
-	note.add_theme_font_size_override("font_size", 15)
-	note.add_theme_color_override("font_color", Color(1.0, 0.5, 0.4) if players_msg != "" else Color(0.75, 0.78, 0.75))
-	list.add_child(note)
+		menu_points_lbl.text = "POINTS  %d" % Profile.points
 
 func _build_shop_panel(title_text: String) -> PanelContainer:
 	var p := PanelContainer.new()
@@ -831,9 +767,6 @@ func _fill_shop_panel(p: PanelContainer) -> void:
 	var list: VBoxContainer = p.get_meta("list")
 	for c in list.get_children():
 		c.queue_free()
-	if p == players_panel:
-		_fill_players(p, list)
-		return
 	if p == cache_panel:
 		# what the last cache gave you
 		if cache_result != "":
@@ -927,55 +860,75 @@ func _fill_shop_panel(p: PanelContainer) -> void:
 
 var cache_result := ""
 
-# picture of a cache: a reinforced crate with a glowing lock, drawn in code.
-# `tint` colours the lid and bands so later caches can look different.
+# picture of a cache: a moulded plastic storage case with snap latches and a
+# carry handle, drawn in code. `tint` is the plastic colour so later caches can
+# look different.
 class CacheArt extends Control:
-	var tint := Color(1.0, 0.6, 0.2)
+	var tint := Color(1.0, 0.55, 0.12)
+
+	func _rbox(r: Rect2, c: Color, rad: float, border := Color(0, 0, 0, 0), bw := 0) -> void:
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = c
+		sb.set_corner_radius_all(int(rad))
+		sb.anti_aliasing = true
+		if bw > 0:
+			sb.border_color = border
+			sb.set_border_width_all(bw)
+		draw_style_box(sb, r)
+
 	func _draw() -> void:
 		var w := size.x
 		var h := size.y
 		var cx := w * 0.5
 		# soft glow behind and a shadow under it
 		for k in 6:
-			var r := w * (0.48 - k * 0.05)
-			draw_circle(Vector2(cx, h * 0.5), r, Color(tint.r, tint.g, tint.b, 0.035 + k * 0.012))
-		draw_set_transform(Vector2(cx, h * 0.88), 0.0, Vector2(1.0, 0.22))
-		draw_circle(Vector2.ZERO, w * 0.36, Color(0, 0, 0, 0.45))
+			draw_circle(Vector2(cx, h * 0.5), w * (0.48 - k * 0.05), Color(tint.r, tint.g, tint.b, 0.03 + k * 0.01))
+		draw_set_transform(Vector2(cx, h * 0.87), 0.0, Vector2(1.0, 0.2))
+		draw_circle(Vector2.ZERO, w * 0.38, Color(0, 0, 0, 0.5))
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-		# body
-		var bx := w * 0.16
-		var bw := w * 0.68
-		var by := h * 0.44
-		var bh := h * 0.42
-		var wood := Color(0.30, 0.20, 0.12)
-		draw_rect(Rect2(bx, by, bw, bh), wood)
-		for i in 3:   # planks
-			var py := by + bh * (i + 1) / 4.0
-			draw_line(Vector2(bx, py), Vector2(bx + bw, py), wood.darkened(0.35), 2.0)
-		# lid: a slanted top so it reads as a 3D box
-		var lid := PackedVector2Array([Vector2(bx - w * 0.03, by), Vector2(bx + w * 0.06, h * 0.24),
-			Vector2(bx + bw - w * 0.06, h * 0.24), Vector2(bx + bw + w * 0.03, by)])
-		draw_colored_polygon(lid, wood.lightened(0.15))
-		draw_polyline(PackedVector2Array([lid[0], lid[1], lid[2], lid[3], lid[0]]), wood.darkened(0.5), 2.0)
-		# metal bands in the cache's colour
-		var band := tint.darkened(0.15)
-		for fx in [0.24, 0.76]:
+		var plastic := tint
+		var dark := tint.darkened(0.45)
+		var edge := tint.darkened(0.65)
+		var bx := w * 0.13
+		var bw := w * 0.74
+		# top face of the lid (seen from slightly above), a lighter rounded slab
+		var top := Rect2(bx + w * 0.03, h * 0.26, bw - w * 0.06, h * 0.12)
+		_rbox(top, plastic.lightened(0.18), w * 0.05, edge, 2)
+		# carry handle moulded into the lid
+		_rbox(Rect2(cx - w * 0.16, h * 0.2, w * 0.32, h * 0.09), dark, w * 0.04, edge, 2)
+		_rbox(Rect2(cx - w * 0.11, h * 0.225, w * 0.22, h * 0.04), Color(0.06, 0.06, 0.07), w * 0.02)
+		# lid front
+		var lid := Rect2(bx, h * 0.35, bw, h * 0.15)
+		_rbox(lid, plastic, w * 0.04, edge, 2)
+		# seam between lid and base
+		draw_line(Vector2(bx + w * 0.02, h * 0.505), Vector2(bx + bw - w * 0.02, h * 0.505), Color(0, 0, 0, 0.55), 3.0)
+		# base: slightly darker, with moulded ribs
+		var base := Rect2(bx + w * 0.01, h * 0.51, bw - w * 0.02, h * 0.33)
+		_rbox(base, plastic.darkened(0.12), w * 0.05, edge, 2)
+		for fx in [0.3, 0.5, 0.7]:
 			var x: float = w * fx
-			draw_rect(Rect2(x - w * 0.035, by, w * 0.07, bh), band)
-			draw_line(Vector2(x, by), Vector2(x + (w * 0.03 if fx > 0.5 else -w * 0.03), h * 0.24), band, w * 0.07)
-		draw_rect(Rect2(bx - w * 0.03, by - h * 0.025, bw + w * 0.06, h * 0.05), band.darkened(0.2))
-		# rivets
-		for fx in [0.24, 0.76]:
-			for fy in [0.52, 0.66, 0.8]:
-				draw_circle(Vector2(w * fx, h * fy), w * 0.012, band.lightened(0.5))
-		# lock plate with a glowing keyhole
-		var lr := Rect2(cx - w * 0.07, by - h * 0.04, w * 0.14, h * 0.17)
-		draw_rect(lr, Color(0.85, 0.75, 0.45))
-		draw_rect(lr, Color(0.35, 0.28, 0.12), false, 2.0)
-		draw_circle(Vector2(cx, by + h * 0.03), w * 0.035, tint.lightened(0.3))
-		draw_circle(Vector2(cx, by + h * 0.03), w * 0.018, Color(1, 1, 0.85))
-		# outline of the body
-		draw_rect(Rect2(bx, by, bw, bh), wood.darkened(0.55), false, 2.0)
+			_rbox(Rect2(x - w * 0.025, h * 0.56, w * 0.05, h * 0.24), plastic.darkened(0.22), w * 0.02)
+			draw_line(Vector2(x - w * 0.02, h * 0.565), Vector2(x - w * 0.02, h * 0.79), plastic.lightened(0.1), 1.5)
+		# rubber feet
+		for fx in [0.22, 0.78]:
+			_rbox(Rect2(w * fx - w * 0.06, h * 0.835, w * 0.12, h * 0.03), Color(0.08, 0.08, 0.09), w * 0.015)
+		# snap latches over the seam (black plastic with a coloured tab)
+		for fx in [0.2, 0.8]:
+			var lx: float = w * fx
+			_rbox(Rect2(lx - w * 0.055, h * 0.43, w * 0.11, h * 0.15), Color(0.1, 0.1, 0.11), w * 0.025, Color(0, 0, 0), 1)
+			_rbox(Rect2(lx - w * 0.035, h * 0.455, w * 0.07, h * 0.05), tint.lightened(0.25), w * 0.015)
+		# glossy highlight along the top of the lid and the base
+		draw_line(Vector2(bx + w * 0.07, h * 0.37), Vector2(bx + bw - w * 0.07, h * 0.37), Color(1, 1, 1, 0.45), 2.0)
+		draw_line(Vector2(bx + w * 0.08, h * 0.285), Vector2(cx - w * 0.18, h * 0.285), Color(1, 1, 1, 0.35), 2.0)
+		draw_line(Vector2(bx + w * 0.06, h * 0.53), Vector2(bx + w * 0.06, h * 0.8), Color(1, 1, 1, 0.18), 3.0)
+		# label plate in the middle of the lid with a glowing "?"
+		var lp := Rect2(cx - w * 0.12, h * 0.385, w * 0.24, h * 0.09)
+		_rbox(lp, Color(0.92, 0.92, 0.9), w * 0.015, edge, 1)
+		var f := ThemeDB.fallback_font
+		var fs := int(h * 0.08)
+		var q := "?"
+		var qs := f.get_string_size(q, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
+		draw_string(f, Vector2(cx - qs.x * 0.5, lp.position.y + lp.size.y * 0.5 + fs * 0.35), q, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, tint.darkened(0.3))
 
 func _swatch(c: Color, s: float) -> ColorRect:
 	var cr := ColorRect.new()
@@ -1268,7 +1221,7 @@ func _layout() -> void:
 	if controls_panel:
 		controls_panel.reset_size()
 		controls_panel.position = (vs - controls_panel.size) * 0.5
-	for sp in [cache_panel, inventory_panel, players_panel]:
+	for sp in [cache_panel, inventory_panel]:
 		if sp:
 			sp.reset_size()
 			sp.position = (vs - sp.size) * 0.5

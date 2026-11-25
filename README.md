@@ -21,10 +21,10 @@ driven at 75 km/h (`PAR_SPEED` in `car.gd`). Endless Road pays out the same way 
 The stock gloss black is always there. Skins and caches are defined in `SKINS` and `CACHES` in
 `game/scripts/profile.gd`.
 
-**Players:** several people can share one computer. The **Players** button next to the points on the start
-screen switches player or adds a new one, and each player has their own points, skins and equipped car colour.
-Saves are in `user://players/<name>.cfg`, and `user://players.cfg` remembers who played last. A save from before
-profiles is moved into "Player 1" automatically.
+**Saves:** points, skins and the equipped colour are saved in `user://profile.cfg` (on Windows
+`%APPDATA%\Godot\app_userdata\Forest Drift`), next to `settings.cfg`. That folder is on each person's own
+computer and is never in the download or the updates, so everyone who plays starts fresh with their own save
+and updating keeps it. (v1.2-1.3 had named players; the last one played is moved back into the single save.)
 
 ## Tumbling, rollovers and roof landings
 When all four wheels leave the ground, or the car tips past about 45°, it becomes a free rigid body
