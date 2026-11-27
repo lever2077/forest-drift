@@ -4,7 +4,7 @@ extends Node3D
 
 const MB = preload("res://scripts/mb.gd")
 const Biome = preload("res://scripts/biome.gd")
-const Stadium = preload("res://scripts/stadium.gd")
+const Gfx = preload("res://scripts/gfx.gd")
 
 # cosmetic biome (set by main before build); see biome.gd
 var biome: Dictionary = Biome.get_biome("Forest")
@@ -61,7 +61,7 @@ func _apply_surface() -> void:
 	# wet: darker and shiny, but not mirror-smooth (that glitters with the bump map)
 	road_mat.roughness = lerpf(0.82, 0.34, surf_wet)
 	road_mat.metallic_specular = lerpf(0.5, 0.7, surf_wet)
-	road_mat.albedo_color = Color.WHITE.lerp(Color(0.6, 0.61, 0.64), surf_wet)
+	Gfx.set_albedo(road_mat, Color.WHITE.lerp(Color(0.6, 0.61, 0.64), surf_wet))
 	road_mat.normal_scale = lerpf(0.6, 0.15, surf_wet)
 	road_mat.clearcoat_enabled = surf_wet > 0.3
 	road_mat.clearcoat = 0.6
@@ -93,11 +93,142 @@ func build() -> void:
 	hills2.frequency = 0.02
 	_sample_curve()
 	_build_grid()
+	if biome.get("sea", false):
+		_setup_sea()
 	_build_road_mesh()
 	_build_terrain()
 	_build_start_gantry()
-	if biome.get("stadium", false):
-		Stadium.build(self, self)
+
+# ---------------------------------------------------------------- beach: sea outside the loop
+# The Beach biome puts the ocean all round the outside of the circuit: the
+# ground outside the loop slopes from the road down to a beach and under the
+# water (a longer slope where the road is high up), while the land inside the
+# loop is kept above the water. "Outside" = reachable from the edge of the map
+# without crossing the road (a flood fill on the road-distance grid).
+const Sea = preload("res://scripts/sea.gd")
+var sea := false
+var sea_y := -1e9            # water level (grass and trees stay above it)
+var g_out := PackedByteArray()   # 1 = grid cell outside the loop
+var g_od := PackedFloat32Array()    # outside the loop: distance to the road
+var g_orh := PackedFloat32Array()   # ... and that road's height
+
+func _setup_sea() -> void:
+	sea = true
+	var lo := 1e9
+	for p in pts:
+		lo = min(lo, (p as Vector3).y)
+	sea_y = lo - 2.4
+	g_out.resize(gw * gh)
+	g_out.fill(0)
+	# a thick wall (38 m round the road) so the fill can't run into the gaps
+	# between stacked switchback tiers - those count as land, not sea (it used
+	# to lower the ground between them into a steep wall under the upper tier)
+	var wall := 38.0
+	var queue := PackedInt32Array()
+	for gx in gw:
+		for gz in [0, gh - 1]:
+			queue.append(gz * gw + gx)
+	for gz in gh:
+		for gx in [0, gw - 1]:
+			queue.append(gz * gw + gx)
+	var qi := 0
+	while qi < queue.size():
+		var id := queue[qi]
+		qi += 1
+		if g_out[id] == 1 or g_dist[id] < wall:
+			continue
+		g_out[id] = 1
+		var gx2 := id % gw
+		var gz2 := id / gw
+		if gx2 > 0: queue.append(id - 1)
+		if gx2 < gw - 1: queue.append(id + 1)
+		if gz2 > 0: queue.append(id - gw)
+		if gz2 < gh - 1: queue.append(id + gw)
+	# then grow the sea side back into that band towards the road, but only as far
+	# as the band reaches from the real outside: right up to the outer edge of the
+	# road, while a narrow gap between two tiers stays land
+	var grow := PackedInt32Array()
+	var gd := PackedFloat32Array()
+	gd.resize(gw * gh)
+	gd.fill(1e9)
+	for id in gw * gh:
+		if g_out[id] == 1:
+			gd[id] = 0.0
+			grow.append(id)
+	var gi := 0
+	while gi < grow.size():
+		var id := grow[gi]
+		gi += 1
+		var gx4 := id % gw
+		var gz4 := id / gw
+		for nb in [id - 1 if gx4 > 0 else -1, id + 1 if gx4 < gw - 1 else -1, id - gw if gz4 > 0 else -1, id + gw if gz4 < gh - 1 else -1]:
+			var j: int = nb
+			if j < 0 or g_out[j] == 1 or g_dist[j] < HALF_W + 1.5:
+				continue
+			var nd := gd[id] + G_CELL
+			# only cells you reach by heading straight in towards the road
+			if nd < gd[j] and nd <= wall - g_dist[j] + G_CELL * 2.0:
+				gd[j] = nd
+				g_out[j] = 1
+				grow.append(j)
+	# distance from the road (and that road's height) for every cell outside the
+	# loop: the road grid only knows them within ~50 m, and past that the
+	# ground used to drop straight to the seabed in a sheer cliff
+	g_od.resize(gw * gh)
+	g_orh.resize(gw * gh)
+	g_od.fill(1e9)
+	var front := PackedInt32Array()
+	for id in gw * gh:
+		if g_out[id] == 1 and g_dist[id] < 1e8:
+			g_od[id] = g_dist[id]
+			g_orh[id] = g_rh[id]
+			front.append(id)
+	var fi := 0
+	while fi < front.size():
+		var id := front[fi]
+		fi += 1
+		var gx3 := id % gw
+		var gz3 := id / gw
+		for nb in [id - 1 if gx3 > 0 else -1, id + 1 if gx3 < gw - 1 else -1, id - gw if gz3 > 0 else -1, id + gw if gz3 < gh - 1 else -1]:
+			var j: int = nb
+			if j < 0 or g_out[j] != 1:
+				continue
+			var nd := g_od[id] + G_CELL
+			if nd < g_od[j] - 0.01:
+				g_od[j] = nd
+				g_orh[j] = g_orh[id]
+				front.append(j)
+	var s := Sea.new()
+	s.name = "Sea"
+	add_child(s)
+	s.setup(sea_y)
+
+func _outside(x: float, z: float) -> bool:
+	var ix := int(round((x - G_MIN.x) / G_CELL))
+	var iz := int(round((z - G_MIN.y) / G_CELL))
+	if ix < 0 or iz < 0 or ix >= gw or iz >= gh:
+		return true   # beyond the road grid: well outside the loop
+	return g_out[iz * gw + ix] == 1
+
+# the ground height h at (x, z) reshaped for the sea
+func _sea_shape(x: float, z: float, h: float) -> float:
+	if not _outside(x, z):
+		return max(h, sea_y + 0.6)
+	var d := 1e9
+	var rh := h
+	var ix := int(round((x - G_MIN.x) / G_CELL))
+	var iz := int(round((z - G_MIN.y) / G_CELL))
+	if ix >= 0 and iz >= 0 and ix < gw and iz < gh:
+		d = g_od[iz * gw + ix]
+		rh = g_orh[iz * gw + ix] if d < 1e8 else h
+	var s0 := HALF_W + 2.0
+	if d <= s0:
+		return h
+	# beach width, longer where the road is high up (a sloping bank, not a cliff)
+	var s1: float = s0 + clampf((rh - sea_y) * 3.0, float(biome.get("sea_start", 28.0)) - s0, 180.0)
+	if d <= s1:   # beach (a sloping bank where the road is high)
+		return lerpf(min(h, rh - 0.15), sea_y + 0.25, sstep(s0, s1, d))
+	return lerpf(sea_y + 0.25, sea_y - 6.0, sstep(s1, s1 + 50.0, d)) + base_hill(x, z) * 0.04
 
 # ---------------------------------------------------------------- curve
 static func _cr(p0: Vector2, p1: Vector2, p2: Vector2, p3: Vector2, t: float) -> Vector2:
@@ -402,9 +533,18 @@ func _build_road_mesh() -> void:
 	var line_mat := StandardMaterial3D.new()
 	line_mat.albedo_color = Color(0.86, 0.86, 0.82)
 	line_mat.roughness = 0.6
+	if float(biome.get("line_glow", 0.0)) > 0.0:   # neon road lines (biome)
+		line_mat.emission_enabled = true
+		line_mat.emission = biome.get("glow_col", Color.WHITE)
+		line_mat.emission_energy_multiplier = float(biome["line_glow"])
 	var kerb_mat := StandardMaterial3D.new()
 	kerb_mat.vertex_color_use_as_albedo = true
 	kerb_mat.roughness = 0.55
+	# Low detail: smooth flat asphalt / gravel; baked lighting: drawn unshaded
+	Gfx.surface(road_mat, Color(0.185, 0.185, 0.19))
+	Gfx.surface(sh_mat, Color(0.31, 0.28, 0.235))
+	Gfx.surface(line_mat)
+	Gfx.surface(kerb_mat)
 	var mi := MeshInstance3D.new()
 	mi.mesh = mb.build({"road": road_mat, "shoulder": sh_mat, "line": line_mat, "kerb": kerb_mat})
 	mi.name = "Road"
@@ -450,6 +590,8 @@ func _build_terrain() -> void:
 			var z := T_MIN.y + iz * step
 			var h := terrain_h(x, z)
 			var d := road_dist(x, z)
+			if sea:
+				h = _sea_shape(x, z, h)
 			verts[iz * nx + ix] = Vector3(x, h, z)
 			cols[iz * nx + ix] = Color(clampf((d - HALF_W) / 10.0, 0.0, 1.0), 1, 1)
 	var norms := PackedVector3Array()
@@ -461,6 +603,10 @@ func _build_terrain() -> void:
 			var hd: float = verts[max(iz - 1, 0) * nx + ix].y
 			var hu: float = verts[min(iz + 1, nz - 1) * nx + ix].y
 			norms[iz * nx + ix] = Vector3(hl - hr, 2.0 * step, hd - hu).normalized()
+			if Gfx.baked:   # baked light in the green channel (tree shadows added by bake_shadows)
+				var bc: Color = cols[iz * nx + ix]
+				bc.g = Gfx.light_at(norms[iz * nx + ix]) / Gfx.TERRAIN_SCALE
+				cols[iz * nx + ix] = bc
 	# keep the vertex heights so surface_h() can return the exact rendered ground
 	t_step = step
 	t_nx = nx
@@ -486,7 +632,7 @@ func _build_terrain() -> void:
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	var sh := Shader.new()
-	sh.code = Biome.TERRAIN_SHADER   # shared ground shader (biome colours)
+	sh.code = Gfx.shader_code(Biome.TERRAIN_SHADER)   # shared ground shader (biome colours)
 	var mat := ShaderMaterial.new()
 	terrain_mat = mat
 	mat.shader = sh
@@ -495,10 +641,63 @@ func _build_terrain() -> void:
 	mat.set_shader_parameter("detail_n", _noise_tex(0.08, true, 512))
 	Biome.apply_terrain(mat, biome)
 	mesh.surface_set_material(0, mat)
+	t_mesh = mesh
+	t_arrays = arrays
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
 	mi.name = "Terrain"
 	add_child(mi)
+
+var t_mesh: ArrayMesh
+var t_arrays := []
+
+# Baked lighting: soft tree shadows on the ground. Each tree (x, z, r) darkens
+# the ground where its crown blocks the baked sun, plus a little contact shade
+# right around the trunk. Done once after the forest is planted.
+func bake_shadows(trees: Array) -> void:
+	if t_mesh == null or t_arrays.is_empty():
+		return
+	var sun := Gfx.BAKE_SUN.normalized()
+	var crown_h := 6.0
+	var off := -Vector2(sun.x, sun.z) / sun.y * crown_h   # where the crown's shadow lands
+	var sh := PackedFloat32Array()
+	var ao := PackedFloat32Array()
+	sh.resize(t_nx * t_nz)
+	ao.resize(t_nx * t_nz)
+	sh.fill(1.0)
+	ao.fill(1.0)
+	var R := 4.5
+	for t in trees:
+		var tv: Vector3 = t
+		for pass_i in 2:
+			var c := Vector2(tv.x, tv.y) + (off if pass_i == 0 else Vector2.ZERO)
+			var rad := R if pass_i == 0 else 3.0
+			var ix0 := int(floor((c.x - rad - T_MIN.x) / t_step))
+			var iz0 := int(floor((c.y - rad - T_MIN.y) / t_step))
+			var ix1 := int(ceil((c.x + rad - T_MIN.x) / t_step))
+			var iz1 := int(ceil((c.y + rad - T_MIN.y) / t_step))
+			for iz in range(max(iz0, 0), min(iz1 + 1, t_nz)):
+				for ix in range(max(ix0, 0), min(ix1 + 1, t_nx)):
+					var p := Vector2(T_MIN.x + ix * t_step, T_MIN.y + iz * t_step)
+					var f := 1.0 - smoothstep(rad * 0.35, rad, p.distance_to(c))
+					if f <= 0.0:
+						continue
+					var i := iz * t_nx + ix
+					if pass_i == 0:
+						sh[i] *= 1.0 - 0.55 * f
+					else:
+						ao[i] *= 1.0 - 0.3 * f
+	var cols: PackedColorArray = t_arrays[Mesh.ARRAY_COLOR]
+	var norms: PackedVector3Array = t_arrays[Mesh.ARRAY_NORMAL]
+	for i in cols.size():
+		var bc: Color = cols[i]
+		bc.g = Gfx.light_at(norms[i], maxf(ao[i], 0.5), maxf(sh[i], 0.2)) / Gfx.TERRAIN_SCALE
+		cols[i] = bc
+	t_arrays[Mesh.ARRAY_COLOR] = cols
+	var mat := t_mesh.surface_get_material(0)
+	t_mesh.clear_surfaces()
+	t_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, t_arrays)
+	t_mesh.surface_set_material(0, mat)
 
 # ---------------------------------------------------------------- start gantry
 func _build_start_gantry() -> void:

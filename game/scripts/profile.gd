@@ -14,32 +14,118 @@ static var dev_path := ""                  # dev aid: --profile=<file> uses that
 # owned and never shows up in a cache.
 const STOCK_SKIN := "skin_stock"
 const SKINS := {
-	"skin_stock":  {"name": "Gloss Black (stock)", "color": Color(0.012, 0.012, 0.015)},
-	"skin_red":    {"name": "Racing Red",    "color": Color(0.55, 0.02, 0.02)},
-	"skin_blue":   {"name": "Deep Blue",     "color": Color(0.02, 0.08, 0.45)},
-	"skin_green":  {"name": "Forest Green",  "color": Color(0.03, 0.22, 0.06)},
-	"skin_yellow": {"name": "Sunburst Yellow", "color": Color(0.75, 0.55, 0.02)},
-	"skin_orange": {"name": "Blaze Orange",  "color": Color(0.8, 0.22, 0.01)},
-	"skin_purple": {"name": "Midnight Purple", "color": Color(0.17, 0.03, 0.3)},
-	"skin_white":  {"name": "Pearl White",   "color": Color(0.8, 0.8, 0.78)},
-	"skin_silver": {"name": "Silver",        "color": Color(0.42, 0.43, 0.45)},
-	"skin_pink":   {"name": "Hot Pink",      "color": Color(0.75, 0.08, 0.35)},
-	"skin_teal":   {"name": "Teal",          "color": Color(0.02, 0.35, 0.35)},
+	"skin_stock":     {"name": "Grey", "color": Color(0.32, 0.33, 0.34)},
+	# S tier
+	"skin_white":     {"name": "White",      "color": Color(0.9, 0.9, 0.9)},
+	"skin_black":     {"name": "Black",      "color": Color(0.012, 0.012, 0.015)},
+	# A tier
+	"skin_fuchsia":   {"name": "Fuchsia",    "color": Color(0.95, 0.0, 0.95)},
+	"skin_skyblue":   {"name": "Blue",       "color": Color(0.0, 0.66, 0.95)},
+	"skin_cyan":      {"name": "Cyan",       "color": Color(0.0, 0.95, 0.95)},
+	"skin_turquoise": {"name": "Turquoise",  "color": Color(0.25, 0.86, 0.8)},
+	# B tier
+	"skin_yellow":    {"name": "Yellow",     "color": Color(1.0, 0.72, 0.0)},
+	"skin_orange":    {"name": "Orange",     "color": Color(1.0, 0.45, 0.0)},
+	"skin_purple":    {"name": "Purple",     "color": Color(0.42, 0.0, 1.0)},
+	# C tier
+	"skin_red":       {"name": "Red",        "color": Color(0.75, 0.0, 0.0)},
+	"skin_blue":      {"name": "Dark Blue",  "color": Color(0.0, 0.0, 0.95)},
+	"skin_green":     {"name": "Green",      "color": Color(0.0, 0.56, 0.27)},
+	"skin_pink":      {"name": "Pink",       "color": Color(1.0, 0.5, 1.0)},
+	# no longer in any cache: kept so skins people already own still work
+	"skin_silver":    {"name": "Silver",     "color": Color(0.42, 0.43, 0.45)},
+	"skin_teal":      {"name": "Teal",       "color": Color(0.02, 0.35, 0.35)},
 }
 
-# ---------------------------------------------------------------- caches
-# Opening a cache costs "price" points and gives one random item from "items"
-# (equal odds). Duplicates stack in the inventory.
-const CACHES := [
-	{
-		"id": "basic",
-		"name": "Basic Cache",
-		"price": 100,
-		"info": "One random solid-colour skin",
-		"items": ["skin_red", "skin_blue", "skin_green", "skin_yellow", "skin_orange",
-			"skin_purple", "skin_white", "skin_silver", "skin_pink", "skin_teal"],
-	},
+# Basic Cache odds by tier: [chance, skins]. The chance is split evenly between
+# the skins in that tier. (60 + 20 + 10 + 5 = 95: the odds are relative, so
+# that works out to 63.2% / 21.1% / 10.5% / 5.3%.)
+const BASIC_TIERS := [
+	[60.0, ["skin_red", "skin_blue", "skin_green", "skin_pink"]],                   # C
+	[20.0, ["skin_yellow", "skin_orange", "skin_purple"]],                          # B
+	[10.0, ["skin_fuchsia", "skin_skyblue", "skin_cyan", "skin_turquoise"]],        # A
+	[5.0, ["skin_white", "skin_black"]],                                            # S
 ]
+
+# Neon skins: the Basic colours, but the paint glows in that colour ("neon":
+# true; car_model.set_paint makes it emissive). neon_<x> is skin_<x> lit up.
+# The Neon Cache has its own tiers. Its odds are percentages (they add up to
+# 100): the better tiers are a touch rarer than the Basic Cache's
+# (63.2 / 21.1 / 10.5 / 5.3 %), never by more than 0.5 percentage points.
+const NEON_TIERS := [
+	[64.0, ["neon_red", "neon_blue", "neon_green", "neon_black"]],               # C
+	[21.0, ["neon_yellow", "neon_purple", "neon_pink"]],                         # B
+	[10.2, ["neon_skyblue", "neon_turquoise", "neon_orange"]],                   # A
+	[4.8, ["neon_white", "neon_fuchsia", "neon_cyan"]],                          # S
+]
+
+static func _neon_tiers() -> Array:
+	return NEON_TIERS
+
+# rarity colours by tier: C grey, B blue, A orange, S red (crate roll, inventory)
+const RARITY_COLORS := [Color(0.62, 0.64, 0.68), Color(0.25, 0.5, 1.0), Color(1.0, 0.55, 0.1), Color(0.95, 0.15, 0.15)]
+
+# a skin's rarity tier from the cache it comes from (neon skins from the Neon
+# Cache, the rest from the Basic Cache); -1 for the stock skin and old skins
+# that no cache gives any more
+static func skin_tier(id: String) -> int:
+	return item_tier("neon" if id.begins_with("neon_") else "basic", id)
+
+# tier of an item in a cache: 0 = C, 1 = B, 2 = A, 3 = S (-1 if not in it)
+static func item_tier(cache_id: String, id: String) -> int:
+	var tiers := cache_tiers(cache_id)
+	for i in tiers.size():
+		if (tiers[i][1] as Array).has(id):
+			return i
+	return -1
+
+static func _skin(id: String) -> Dictionary:
+	if SKINS.has(id):
+		return SKINS[id]
+	if id.begins_with("neon_"):
+		var base := "skin_" + id.substr(5)
+		if SKINS.has(base):
+			return {"name": "Neon " + String(SKINS[base]["name"]), "color": SKINS[base]["color"], "neon": true}
+	return {}
+
+static func is_skin(id: String) -> bool:
+	return not _skin(id).is_empty()
+
+static func skin_neon(id: String) -> bool:
+	return bool(_skin(id).get("neon", false))
+
+# ---------------------------------------------------------------- caches
+# Opening a cache costs "price" points and gives one random item, rolled by
+# tier (cache_tiers). Duplicates stack in the inventory.
+const CACHES := [
+	{"id": "basic", "name": "Basic Cache", "price": 100},
+	{"id": "neon", "name": "Neon Cache", "price": 1000, "tint": Color(0.2, 1.0, 0.9)},
+]
+
+static func cache_tiers(id: String) -> Array:
+	match id:
+		"basic":
+			return BASIC_TIERS
+		"neon":
+			return _neon_tiers()
+	return []
+
+# one weighted roll: pick a tier by its chance, then a skin in it at random
+static func _roll(tiers: Array) -> String:
+	var total := 0.0
+	for t in tiers:
+		if not (t[1] as Array).is_empty():
+			total += float(t[0])
+	var r := randf() * total
+	for t in tiers:
+		var ids: Array = t[1]
+		if ids.is_empty():
+			continue
+		r -= float(t[0])
+		if r < 0.0:
+			return ids[randi() % ids.size()]
+	var last: Array = tiers[tiers.size() - 1][1]
+	return last[randi() % last.size()]
 
 # ---------------------------------------------------------------- cars
 # Every car you can drive (Inventory > Cars). "model" picks the visual model:
@@ -48,7 +134,7 @@ const CACHES := [
 const STOCK_CAR := "car_350z"
 const CARS := {
 	"car_350z": {"name": "350Z Nismo (original)", "info": "the built-in car, full damage model", "model": ""},
-	"car_cc96_2": {"name": "CC96 Sport", "info": "IceMaan CC96 with a wing, dents but no breakable parts", "model": "cc96", "body": 2, "rims": 2, "spoiler": true},
+	"car_cc96_2": {"name": "CC96 Sport", "info": "IceMaan CC96 with a wing: soft body, doors, bonnet, bumpers, wing, lights and glass all break", "model": "cc96", "body": 2, "rims": 2, "spoiler": true},
 }
 static var equipped_car := STOCK_CAR
 
@@ -61,6 +147,7 @@ static func equip_car(id: String) -> void:
 static var points := 0
 static var inventory := {}     # item id -> count
 static var equipped_skin := STOCK_SKIN
+static var redeemed: Array = []   # codes already used on this save (each works once)
 static var _loaded := false
 
 # v1.2-1.3 kept named players in user://players/. Bring the last one played
@@ -100,6 +187,7 @@ static func load_profile() -> void:
 	inventory = {}
 	equipped_skin = STOCK_SKIN
 	equipped_car = STOCK_CAR
+	redeemed = []
 	var cf := ConfigFile.new()
 	if cf.load(PATH) == OK:
 		points = int(cf.get_value("profile", "points", 0))
@@ -109,6 +197,8 @@ static func load_profile() -> void:
 		if not owns(equipped_skin):
 			equipped_skin = STOCK_SKIN
 		equipped_car = String(cf.get_value("profile", "car", STOCK_CAR))
+		var rc = cf.get_value("profile", "codes", [])
+		redeemed = rc if rc is Array else []
 		if not CARS.has(equipped_car):
 			equipped_car = STOCK_CAR
 
@@ -118,6 +208,7 @@ static func save_profile() -> void:
 	cf.set_value("profile", "inventory", inventory)
 	cf.set_value("profile", "skin", equipped_skin)
 	cf.set_value("profile", "car", equipped_car)
+	cf.set_value("profile", "codes", redeemed)
 	cf.save(PATH)
 
 static func add_points(n: int) -> void:
@@ -126,8 +217,8 @@ static func add_points(n: int) -> void:
 	save_profile()
 
 static func item_name(id: String) -> String:
-	if SKINS.has(id):
-		return SKINS[id]["name"]
+	if is_skin(id):
+		return _skin(id)["name"]
 	return id
 
 static func item_count(id: String) -> int:
@@ -163,19 +254,45 @@ static func find_cache(id: String) -> Dictionary:
 static func open_cache(id: String) -> String:
 	load_profile()
 	var c := find_cache(id)
-	if c.is_empty() or points < int(c["price"]) or c["items"].is_empty():
+	var tiers := cache_tiers(id)
+	if c.is_empty() or points < int(c["price"]) or tiers.is_empty():
 		return ""
 	points -= int(c["price"])
-	var won: String = c["items"][randi() % c["items"].size()]
+	var won := _roll(tiers)
 	inventory[won] = item_count(won) + 1
 	save_profile()
 	return won
 
 static func skin_color(id: String) -> Color:
+	if is_skin(id):
+		return _skin(id)["color"]
 	return SKINS.get(id, SKINS[STOCK_SKIN])["color"]
 
 static func equip_skin(id: String) -> void:
 	load_profile()
-	if SKINS.has(id) and owns(id):
+	if is_skin(id) and owns(id):
 		equipped_skin = id
 		save_profile()
+
+# ---------------------------------------------------------------- codes
+# Settings > Codes. Each code works once per save. Typing is not case-sensitive.
+const CODES := {
+	"forestdrift": {"points": 50000},
+}
+
+# returns [ok, message] for the Settings panel
+static func redeem_code(text: String) -> Array:
+	load_profile()
+	var key := text.strip_edges().to_lower()
+	if key == "":
+		return [false, "Type a code first."]
+	if not CODES.has(key):
+		return [false, "That code doesn't exist."]
+	if redeemed.has(key):
+		return [false, "You've already used that code."]
+	var reward: Dictionary = CODES[key]
+	var pts := int(reward.get("points", 0))
+	points += pts
+	redeemed.append(key)
+	save_profile()
+	return [true, "Code redeemed: +%d points!" % pts]

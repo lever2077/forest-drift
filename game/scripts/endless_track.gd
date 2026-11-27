@@ -7,6 +7,8 @@ extends Node3D
 
 const MB = preload("res://scripts/mb.gd")
 const Biome = preload("res://scripts/biome.gd")
+const Gfx = preload("res://scripts/gfx.gd")
+const Sea = preload("res://scripts/sea.gd")
 
 # cosmetic biome (set by main before build); see biome.gd
 var biome: Dictionary = Biome.get_biome("Forest")
@@ -51,6 +53,19 @@ var road_mat: StandardMaterial3D
 var sh_mat: StandardMaterial3D
 var line_mat: StandardMaterial3D
 var terrain_mat: ShaderMaterial
+
+# ---- beach biome: the sea along the left side of the road. One flat water
+# surface that follows the camera, so the ocean runs on without a break to the
+# horizon; the ground on that side slopes from the beach down under it.
+var sea := false
+var sea_y := -1e9            # water level (grass and trees stay above it)
+var sea_mi             # sea.gd
+
+func _make_sea() -> void:
+	sea_mi = Sea.new()
+	sea_mi.name = "Sea"
+	add_child(sea_mi)
+	sea_mi.setup(sea_y)
 var surf_wet := 0.0
 var grass_mat: ShaderMaterial    # set by the grass system so snow can frost it
 
@@ -68,6 +83,10 @@ func build() -> void:
 	elev2.frequency = 0.0035
 	elev2.fractal_octaves = 1
 	rng.seed = 12345
+	sea = bool(biome.get("sea", false))
+	if sea:
+		sea_y = float(biome.get("sea_y", -2.4))
+		_make_sea()
 	_make_materials()
 	_generate_until(CHUNK_N * (AHEAD + 6) + 2)
 
@@ -103,7 +122,8 @@ func _generate_until(n: int) -> void:
 		gen_k = move_toward(gen_k, gen_k_target, gen_k_rate * STEP)
 		var d := Vector2(-sin(gen_heading), -cos(gen_heading))
 		# long gradual hills: about +-18 m over ~1 km, grades of a few percent
-		var h := elev.get_noise_1d(dist) * 18.0 + elev2.get_noise_1d(dist) * 3.0
+		var hk := float(biome.get("road_hills", 1.0))   # beach: the road stays near sea level
+		var h := (elev.get_noise_1d(dist) * 18.0 + elev2.get_noise_1d(dist) * 3.0) * hk
 		var i := pts.size()
 		pts.append(Vector3(gen_pos.x, h, gen_pos.y))
 		tans.append(Vector3(d.x, 0, d.y))
@@ -170,11 +190,48 @@ func _d2(i: int, x: float, z: float) -> float:
 	var p: Vector3 = pts[i]
 	return (p.x - x) * (p.x - x) + (p.z - z) * (p.z - z)
 
-func _nearest(x: float, z: float) -> Vector2:
-	var n := pts.size()
+# cap: callers that only compare the distance with a small threshold pass it,
+# so the search stops at that distance (the result is then only exact below cap)
+func _nearest(x: float, z: float, cap := INF) -> Vector2:
 	var best := Vector2(1e9, 0.0)
 	# fast path: walk from the car's road position to the closest sample (a few
 	# steps for points around the car), then check the two segments either side
+	var w := _walk(x, z)
+	for j in [w - 1, w]:
+		var r := _seg(j, x, z)
+		if r.x < best.x:
+			best = r
+	# only trust the shortcut on or right beside that stretch of road: further out,
+	# another part of a winding road can be closer (that put grass on the road)
+	if best.x < HALF_W + 2.25:
+		return best
+	# Search the spatial hash, but only the cells that could hold a closer piece
+	# of road: within the distance already found (plus a segment length), never
+	# more than 3 cells out. Searching all 7x7 cells every time made each
+	# off-road ground query ~30x slower, and the car makes ~100 a tick: the
+	# frame rate fell from 120 to under 10 as soon as you left the road.
+	var reach := minf(best.x, cap) + STEP * 1.5
+	var reach2 := reach * reach
+	var cx := int(floor(x / HC))
+	var cz := int(floor(z / HC))
+	for kz in range(maxi(int(floor((z - reach) / HC)), cz - 3), mini(int(floor((z + reach) / HC)), cz + 3) + 1):
+		for kx in range(maxi(int(floor((x - reach) / HC)), cx - 3), mini(int(floor((x + reach) / HC)), cx + 3) + 1):
+			var cell = hash.get(Vector2i(kx, kz))
+			if cell == null:
+				continue
+			for i in cell:
+				if _d2(i, x, z) > reach2:
+					continue
+				var r := _seg(i, x, z)
+				if r.x < best.x:
+					best = r
+					reach = minf(best.x, cap) + STEP * 1.5
+					reach2 = reach * reach
+	return best
+
+# closest road sample reached by walking from the car's position along the road
+func _walk(x: float, z: float) -> int:
+	var n := pts.size()
 	var w := clampi(hint_idx, 1, n - 2)
 	var dw := _d2(w, x, z)
 	var steps := 0
@@ -186,45 +243,38 @@ func _nearest(x: float, z: float) -> Vector2:
 		w -= 1
 		dw = _d2(w, x, z)
 		steps += 1
-	for j in [w - 1, w]:
-		var r := _seg(j, x, z)
-		if r.x < best.x:
-			best = r
-	# only trust the shortcut on or right beside that stretch of road: further out,
-	# another part of a winding road can be closer (that put grass on the road)
-	if best.x < HALF_W + 2.25:
-		return best
-	var cx := int(floor(x / HC))
-	var cz := int(floor(z / HC))
-	for dz in range(-3, 4):
-		for dx in range(-3, 4):
-			var k := Vector2i(cx + dx, cz + dz)
-			if hash.has(k):
-				for i in hash[k]:
-					var r := _seg(i, x, z)
-					if r.x < best.x:
-						best = r
-	return best
+	return w
 
 func road_dist(x: float, z: float) -> float:
 	return _nearest(x, z).x
 
-# nearest road sample index (searching the spatial hash only), or -1
+# nearest road sample: the one reached by walking along the road from the car,
+# or a closer one in the spatial hash (only the cells that could hold one are
+# searched, same reason as in _nearest)
 func _nearest_index_hash(x: float, z: float) -> int:
 	var cx := int(floor(x / HC))
 	var cz := int(floor(z / HC))
 	var best := -1
 	var bd := 1e18
-	for dz in range(-3, 4):
-		for dx in range(-3, 4):
-			var k := Vector2i(cx + dx, cz + dz)
-			if hash.has(k):
-				for i in hash[k]:
-					var p: Vector3 = pts[i]
-					var d := (p.x - x) * (p.x - x) + (p.z - z) * (p.z - z)
-					if d < bd:
-						bd = d
-						best = i
+	# start from the sample reached by walking along the road from the car. The
+	# hash only covers ~50 m around the point, but the ground strip reaches up
+	# to 310 m from the road: further out the lookup used to find nothing and
+	# fall back to plain hills without the dunes, 2-3 m below the sand that's
+	# drawn, so the car sank into the desert.
+	var w := _walk(x, z)
+	best = w
+	bd = _d2(w, x, z)
+	var reach := minf(sqrt(bd), HC * 4.0)
+	for kz in range(maxi(int(floor((z - reach) / HC)), cz - 3), mini(int(floor((z + reach) / HC)), cz + 3) + 1):
+		for kx in range(maxi(int(floor((x - reach) / HC)), cx - 3), mini(int(floor((x + reach) / HC)), cx + 3) + 1):
+			var cell = hash.get(Vector2i(kx, kz))
+			if cell == null:
+				continue
+			for i in cell:
+				var d := _d2(i, x, z)
+				if d < bd:
+					bd = d
+					best = i
 	return best
 
 # height of the terrain ribbon exactly as drawn: rows every 2 samples, columns at
@@ -252,24 +302,90 @@ func surface_h(x: float, z: float) -> float:
 	var pu: Vector3 = (pts[r0] as Vector3).lerp(pts[r1], u)
 	var o := Vector3(x - pu.x, 0, z - pu.z).dot(l0.lerp(l1, u).normalized())
 	var cols := OFFS.size() * 2 - 1
-	var far0 := _col_o(r0, 0)
-	var far1 := _col_o(r0, cols - 1)
-	if o <= lerpf(far0, _col_o(r1, 0), u) or o >= lerpf(far1, _col_o(r1, cols - 1), u):
+	var c0 := _row_cols(r0)
+	var c1 := _row_cols(r1)
+	if o <= lerpf(c0[0], c1[0], u) or o >= lerpf(c0[cols - 1], c1[cols - 1], u):
 		return base_hill(x, z)        # past the strip: the far terrain
+	# the column the point is in: binary search (the offsets only increase).
+	# A linear scan over ~57 columns made every off-road ground query slow.
 	var k := 0
-	while k < cols - 2 and lerpf(_col_o(r0, k + 1), _col_o(r1, k + 1), u) < o:
-		k += 1
-	var A := _rib_vert(r0, k)
-	var B := _rib_vert(r0, k + 1)
-	var C := _rib_vert(r1, k)
-	var D := _rib_vert(r1, k + 1)
+	var hi := cols - 2
+	while k < hi:
+		var mid := (k + hi) >> 1
+		if lerpf(c0[mid + 1], c1[mid + 1], u) < o:
+			k = mid + 1
+		else:
+			hi = mid
 	var P := Vector3(x, 0, z)
+	# That guess measures straight out from the road, but on a bend the rows of
+	# the strip fan out, so far from the road (60+ m) the point is often really
+	# in a neighbouring quad - and the dunes there gave the car a ground up to
+	# 1.8 m below the sand that's drawn (it sank in). So check the quad's real
+	# corners and step to the neighbour the point lies towards until it's inside.
+	var A: Vector3
+	var B: Vector3
+	var C: Vector3
+	var D: Vector3
+	for step in 24:
+		r1 = mini(r0 + 2, n - 1)
+		A = _rib_vert(r0, k)
+		B = _rib_vert(r0, k + 1)
+		C = _rib_vert(r1, k)
+		D = _rib_vert(r1, k + 1)
+		var moved := false
+		# before this row (wrong side of edge A-B) / past the next one (C-D)
+		if r0 >= 2 and _opposite(A, B, P, C):
+			r0 -= 2
+			moved = true
+		elif r0 + 2 <= n - 3 and _opposite(C, D, P, A):
+			r0 += 2
+			moved = true
+		# left of column k (edge A-C) / right of column k+1 (edge B-D); clipped
+		# columns can collapse to a line, then just keep going the same way
+		if not moved:
+			if _opposite(A, C, P, B) or (A.distance_squared_to(B) < 1e-6 and o < 0.0):
+				if k == 0:
+					return base_hill(x, z)   # past the strip's edge
+				k -= 1
+				moved = true
+			elif _opposite(B, D, P, A) or (A.distance_squared_to(B) < 1e-6 and o >= 0.0):
+				if k >= cols - 2:
+					return base_hill(x, z)
+				k += 1
+				moved = true
+		if not moved:
+			break
 	# which side of the B-C diagonal: A's triangle or D's
 	var side_p := _side(B, C, P)
 	var side_a := _side(B, C, A)
 	if (side_p >= 0.0) == (side_a >= 0.0):
 		return _tri_h(A, B, C, x, z)
 	return _tri_h(B, C, D, x, z)
+
+# true when p and ref are on opposite sides of the line a-b (in plan view)
+static func _opposite(a: Vector3, b: Vector3, p: Vector3, ref: Vector3) -> bool:
+	if a.distance_squared_to(b) < 1e-6:
+		return false
+	var sp := _side(a, b, p)
+	var sr := _side(a, b, ref)
+	return (sp > 1e-6 and sr < -1e-6) or (sp < -1e-6 and sr > 1e-6)
+
+# all column offsets of row ri (cached: the ground under the car is asked for
+# ~30 times a tick)
+var _cols_cache := {}
+func _row_cols(ri: int) -> PackedFloat32Array:
+	var hit = _cols_cache.get(ri)
+	if hit != null:
+		return hit
+	var cols := OFFS.size() * 2 - 1
+	var a := PackedFloat32Array()
+	a.resize(cols)
+	for k in cols:
+		a[k] = _col_o(ri, k)
+	if _cols_cache.size() > 20000:
+		_cols_cache.clear()
+	_cols_cache[ri] = a
+	return a
 
 # how far along from row r0 to row r0+2 the point is (0..1 inside)
 func _row_u(r0: int, x: float, z: float) -> float:
@@ -297,7 +413,7 @@ func _rib_vert(ri: int, k: int) -> Vector3:
 	var l := Vector3(-tans[ri].z, 0, tans[ri].x)
 	var o := _col_o(ri, k)
 	var wp := Vector3(p.x, 0, p.z) + l * o
-	var v := Vector3(wp.x, _terrain_from(wp.x, wp.z, abs(o), p.y), wp.z)
+	var v := Vector3(wp.x, _ground_from(wp.x, wp.z, o, p.y), wp.z)
 	if _rv_cache.size() > 40000:
 		_rv_cache.clear()
 	_rv_cache[key] = v
@@ -361,13 +477,31 @@ func _row_limits(ri: int) -> Vector2:
 
 func _rib_h(p: Vector3, l: Vector3, o: float) -> float:
 	var wp := Vector3(p.x, 0, p.z) + l * o
-	return _terrain_from(wp.x, wp.z, abs(o), p.y)
+	return _ground_from(wp.x, wp.z, o, p.y)
 
 func road_h(x: float, z: float) -> float:
 	return _nearest(x, z).y
 
+# Ground height at signed offset o from the road (o < 0 = the driver's left). On
+# the beach the left side is sand sloping down to the sea and then the seabed;
+# everywhere else it's _terrain_from.
+func _ground_from(x: float, z: float, o: float, rh: float) -> float:
+	if sea and o < 0.0:
+		o = -o
+		var s0 := HALF_W + 1.4
+		var s1: float = float(biome.get("sea_start", 28.0))
+		if o <= s0:
+			return rh - 0.15
+		if o <= s1:   # the beach: sand down to just above the water
+			return lerpf(rh - 0.2, sea_y + 0.25, sstep(s0, s1, o))
+		# under the water: shelving down to the seabed, with gentle ripples
+		return lerpf(sea_y + 0.25, sea_y - 6.0, sstep(s1, s1 + 50.0, o)) + base_hill(x, z) * 0.04
+	return _terrain_from(x, z, abs(o), rh)
+
 func _terrain_from(x: float, z: float, d: float, rh: float) -> float:
-	var base := base_hill(x, z) + Biome.extra_height(biome, x, z, d)   # dunes / rocks away from the road
+	# beach: the land side is low rolling ground that never dips into the sea
+	var base := base_hill(x, z) * float(biome.get("land_k", 1.0)) + float(biome.get("land_add", 0.0))
+	base += Biome.extra_height(biome, x, z, d)   # dunes / rocks away from the road
 	if d > G_RADIUS - 1.0:
 		return base
 	# a wide, gentle bank between the road and the hillside
@@ -378,7 +512,7 @@ func terrain_h(x: float, z: float) -> float:
 	return _terrain_from(x, z, r.x, r.y)
 
 func ground_h(x: float, z: float) -> float:
-	var r := _nearest(x, z)
+	var r := _nearest(x, z, HALF_W + 1.4)   # only compared with the shoulder width
 	if r.x < HALF_W:
 		return r.y + 0.04
 	if r.x < HALF_W + 1.4:
@@ -418,7 +552,7 @@ func _apply_surface() -> void:
 	# wet: darker and shiny, but not mirror-smooth (that glitters with the bump map)
 	road_mat.roughness = lerpf(0.82, 0.34, surf_wet)
 	road_mat.metallic_specular = lerpf(0.5, 0.7, surf_wet)
-	road_mat.albedo_color = Color.WHITE.lerp(Color(0.6, 0.61, 0.64), surf_wet)
+	Gfx.set_albedo(road_mat, Color.WHITE.lerp(Color(0.6, 0.61, 0.64), surf_wet))
 	road_mat.normal_scale = lerpf(0.6, 0.15, surf_wet)
 	road_mat.clearcoat_enabled = surf_wet > 0.3
 	road_mat.clearcoat = 0.6
@@ -461,9 +595,17 @@ func _make_materials() -> void:
 	line_mat = StandardMaterial3D.new()
 	line_mat.albedo_color = Color(0.86, 0.86, 0.82)
 	line_mat.roughness = 0.6
+	if float(biome.get("line_glow", 0.0)) > 0.0:   # neon road lines (biome)
+		line_mat.emission_enabled = true
+		line_mat.emission = biome.get("glow_col", Color.WHITE)
+		line_mat.emission_energy_multiplier = float(biome["line_glow"])
 	sh_mat.albedo_color = biome.get("shoulder", Color.WHITE)
+	# Low detail: smooth flat asphalt / gravel; baked lighting: drawn unshaded
+	Gfx.surface(road_mat, Color(0.185, 0.185, 0.19))
+	Gfx.surface(sh_mat, Color(0.31, 0.28, 0.235))
+	Gfx.surface(line_mat)
 	var sh := Shader.new()
-	sh.code = Biome.TERRAIN_SHADER   # shared ground shader (biome colours)
+	sh.code = Gfx.shader_code(Biome.TERRAIN_SHADER)   # shared ground shader (biome colours)
 	terrain_mat = ShaderMaterial.new()
 	terrain_mat.shader = sh
 	terrain_mat.set_shader_parameter("noise_a", _noise_tex(0.01, false, 256))
@@ -528,7 +670,7 @@ func _build_chunk(c: int) -> void:
 			o = min(o, lim.x) if o >= 0.0 else max(o, -lim.y)
 			var wp := Vector3(p.x, 0, p.z) + l * o
 			var d: float = abs(o)
-			var h := _terrain_from(wp.x, wp.z, d, p.y)
+			var h := _ground_from(wp.x, wp.z, o, p.y)
 			verts.append(Vector3(wp.x, h, wp.z))
 			colors.append(Color(clampf((d - HALF_W) / 10.0, 0.0, 1.0), 1, 1))
 		rows += 1
@@ -545,6 +687,10 @@ func _build_chunk(c: int) -> void:
 			if n.y < 0.0:
 				n = -n
 			norms[r * cols + k] = n
+			if Gfx.baked:   # baked light in the green channel
+				var bc: Color = colors[r * cols + k]
+				bc.g = Gfx.light_at(n) / Gfx.TERRAIN_SCALE
+				colors[r * cols + k] = bc
 	var idx := PackedInt32Array()
 	for r in rows - 1:
 		for k in cols - 1:
@@ -585,22 +731,23 @@ func _build_chunk(c: int) -> void:
 		for sd in [1.0, -1.0]:
 			var side_lim: float = tlim.x if sd > 0.0 else tlim.y
 			# dense near the road, thinner deeper in
-			for n in 6:
-				var o := HALF_W + 3.5 + pow(trng.randf(), 1.7) * 150.0
+			# the biome can spread them further out (neon night: buildings far from the road)
+			for n in int(biome.get("tree_tries", 6)):
+				var o := HALF_W + 3.5 + float(biome.get("tree_clear", 0.0)) + pow(trng.randf(), float(biome.get("tree_spread", 1.7))) * float(biome.get("tree_reach", 150.0))
 				var wp: Vector3 = Vector3(p.x, 0, p.z) + l * o * sd + t * trng.randf_range(-2.0, 2.0)
 				var h := _terrain_from(wp.x, wp.z, o, p.y)
 				var s := trng.randf_range(0.8, 1.25)
 				var bas := Basis(Vector3.UP, trng.randf() * TAU).scaled(Vector3(s, s * trng.randf_range(0.92, 1.1), s))
 				var variant: int = trng.randi() % forest.VARIANTS
 				# not on ground that belongs to another stretch of road; the biome thins the trees
-				if o < side_lim - 3.0 and trng.randf() < float(biome.get("tree_k", 1.0)):
+				if o < side_lim - 3.0 and trng.randf() < float(biome.get("tree_k", 1.0)) and not (sea and sd < 0.0):   # nothing on the sea side
 					trees.append([Transform3D(bas, Vector3(wp.x, h - 0.1, wp.z)), variant])
 			if trng.randf() < 0.5:
 				var ob := HALF_W + 2.0 + trng.randf() * 30.0
 				var bp: Vector3 = Vector3(p.x, 0, p.z) + l * ob * sd
 				var bs := trng.randf_range(0.7, 1.5)
 				var bb := Basis(Vector3.UP, trng.randf() * TAU).scaled(Vector3(bs, bs * 0.8, bs))
-				if ob < side_lim - 2.0 and trng.randf() < float(biome.get("bush_k", 1.0)):
+				if ob < side_lim - 2.0 and trng.randf() < float(biome.get("bush_k", 1.0)) and not (sea and sd < 0.0):
 					bushes.append(Transform3D(bb, Vector3(bp.x, _terrain_from(bp.x, bp.z, ob, p.y) - 0.1, bp.z)))
 		ti += 2
 	# group into 48 m cells: the detail level is picked per cell, so only the trees

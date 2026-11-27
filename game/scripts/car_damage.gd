@@ -227,7 +227,8 @@ func _from_frame() -> void:
 		if p["kind"] == "loose":
 			# headlights and the radiator go when the nose crushes; the intake,
 			# battery and air box break loose once the engine bay itself is wrecked
-			if name.begins_with("headlight"):
+			# (tail lights the same way, when the back of the car is crushed)
+			if name.begins_with("headlight") or name.begins_with("taillight"):
 				fd = max(fd, frame_disp_near(b.get_center(), 0.8) * 0.8)
 				if fd > 0.08:
 					_detach(name, 6.0)
@@ -279,9 +280,11 @@ func _upload_lattice() -> void:
 	arr.resize(rest.size())
 	for i in rest.size():
 		var dv: Vector3 = pos[i] - rest[i]
-		# wherever the frame bent, the metal crumples like foil (front, sides,
+		# where the frame bent hard, the metal crumples like foil (front, sides,
 		# engine bay alike)
-		arr[i] = Vector4(dv.x, dv.y, dv.z, clampf(plast[i] * 3.0, 0.0, 0.3))
+		# only properly bent metal crumples like foil: a big hit spreads a little
+		# bend right through the frame, and that used to foil the whole car
+		arr[i] = Vector4(dv.x, dv.y, dv.z, clampf((plast[i] - 0.06) * 3.0, 0.0, 0.3))
 	model.upload_lattice(arr)
 
 # how far the frame around a car-local point has been pushed
@@ -324,6 +327,10 @@ func engine_damage() -> float:
 # One impact. World-space point / push (into the car) / obstacle axis. kind:
 # "tree", "rail" or "ground". vn = closing speed (m/s), radius = obstacle size.
 func hit(kind: String, wp: Vector3, push: Vector3, axis: Vector3, vn: float, radius: float) -> void:
+	# how easily this car breaks (car_model damage_k: >1 crumples deeper and
+	# loses parts and glass sooner)
+	var dkv = model.get("damage_k")
+	var dk: float = float(dkv) if dkv != null else 1.0
 	var inv: Transform3D = model.shell.global_transform.affine_inverse() if model.shell else global_transform.affine_inverse()
 	var lp: Vector3 = inv * wp
 	var lu: Vector3 = (inv.basis * push).normalized()
@@ -337,19 +344,22 @@ func hit(kind: String, wp: Vector3, push: Vector3, axis: Vector3, vn: float, rad
 			# the trunk's axis sits a radius behind the contact point; the bumper
 			# beam and panels spread the load, so the frame feels a wider shape
 			var reff: float = max(radius + 0.35, 0.5)
-			crush("cyl", lp - lu * reff, la, reff, lu, depth)
+			crush("cyl", lp - lu * reff, la, reff, lu, minf(depth * dk, 1.0))
 		"rail":
 			depth = clampf((vn - 2.0) * 0.012, 0.0, 0.15)
-			crush("cyl", lp - lu * 0.3, la, 0.3, lu, depth)
+			crush("cyl", lp - lu * 0.3, la, 0.3, lu, depth * dk)
 		"ground":
 			depth = clampf((vn - 4.0) * 0.04, 0.0, 0.35)
-			crush("plane", lp, Vector3.ZERO, 0.9, lu, depth)
-	_hit_parts(lp, vn)
-	_hit_glass(lp, lu, vn, kind)
+			crush("plane", lp, Vector3.ZERO, 0.9, lu, depth * dk)
+	_hit_parts(lp, vn * dk)
+	_hit_glass(lp, lu, vn * dk, kind)
 
 # ======================================================================= split
 # Cut the body shell into the detachable parts and the windows.
 func _classify(key: String, c: Vector3, n: Vector3) -> String:
+	# models built from other files (car_model_ext.gd) cut themselves up
+	if model.has_method("damage_classify"):
+		return model.damage_classify(key, c, n)
 	var ax: float = abs(c.x)
 	# engine-bay pieces that can break loose and fall out
 	if key == "radiator" or (key in ["hose", "engine"] and c.z < -1.5 and c.z > -1.67 and c.y > 0.3 and ax < 0.45):
@@ -421,7 +431,7 @@ func split() -> void:
 	var srcs := []
 	for si in mesh.get_surface_count():
 		var key := mesh.surface_get_name(si)
-		var arr := mesh.surface_get_arrays(si)
+		var arr := _unindexed(mesh.surface_get_arrays(si))
 		srcs.append(arr)
 		var V: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
 		var N: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
@@ -483,7 +493,7 @@ func split() -> void:
 			model.body.add_child(wmi)
 			windows[part] = {"mi": wmi, "mat": null, "health": 1.0, "aabb": am.get_aabb(), "crack": Vector4.ZERO, "shattered": false}
 			continue
-		var def: Array = PART_DEF[part]
+		var def: Array = model.damage_part_defs()[part] if model.has_method("damage_part_defs") else PART_DEF[part]
 		var pivot := Node3D.new()
 		pivot.name = part
 		pivot.position = def[0]
@@ -494,6 +504,53 @@ func split() -> void:
 		pivot.add_child(pmi)
 		parts[part] = {"pivot": pivot, "mi": pmi, "hinge": def[0], "axis": def[1], "sign": def[2], "kind": def[3],
 			"health": 1.0, "mode": 0, "th": 0.0, "w": 0.0, "aabb": am.get_aabb(), "vel": Vector3.ZERO, "ang": Vector3.ZERO}
+
+# plain triangle lists (3 vertices per triangle): imported models come indexed,
+# but the split works triangle by triangle
+static func _unindexed(arr: Array) -> Array:
+	var I = arr[Mesh.ARRAY_INDEX]
+	if I == null or (I as PackedInt32Array).is_empty():
+		return arr
+	var idx: PackedInt32Array = I
+	var out := []
+	out.resize(Mesh.ARRAY_MAX)
+	var V: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+	var v2 := PackedVector3Array()
+	v2.resize(idx.size())
+	for k in idx.size():
+		v2[k] = V[idx[k]]
+	out[Mesh.ARRAY_VERTEX] = v2
+	if arr[Mesh.ARRAY_NORMAL] != null:
+		var N: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+		var n2 := PackedVector3Array()
+		n2.resize(idx.size())
+		for k in idx.size():
+			n2[k] = N[idx[k]]
+		out[Mesh.ARRAY_NORMAL] = n2
+	else:
+		var n3 := PackedVector3Array()
+		n3.resize(idx.size())
+		for k in range(0, idx.size(), 3):
+			var fn := (v2[k + 2] - v2[k]).cross(v2[k + 1] - v2[k]).normalized()
+			n3[k] = fn
+			n3[k + 1] = fn
+			n3[k + 2] = fn
+		out[Mesh.ARRAY_NORMAL] = n3
+	var C = arr[Mesh.ARRAY_COLOR]
+	var c2 := PackedColorArray()
+	if C != null and (C as PackedColorArray).size() > 0:
+		c2.resize(idx.size())
+		for k in idx.size():
+			c2[k] = C[idx[k]]
+	out[Mesh.ARRAY_COLOR] = c2
+	var U = arr[Mesh.ARRAY_TEX_UV]
+	var u2 := PackedVector2Array()
+	if U != null and (U as PackedVector2Array).size() > 0:
+		u2.resize(idx.size())
+		for k in idx.size():
+			u2[k] = U[idx[k]]
+	out[Mesh.ARRAY_TEX_UV] = u2
+	return out
 
 # every mesh that shows damage, for the material swap in car_model
 func damage_meshes() -> Array:

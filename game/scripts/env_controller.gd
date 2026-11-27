@@ -6,6 +6,7 @@ extends Node3D
 signal time_changed(hour: float)
 signal weather_changed(index: int)
 
+const Gfx = preload("res://scripts/gfx.gd")
 const WEATHERS := ["Clear", "Hazy", "Cloudy", "Foggy", "Rain", "Snow"]
 # cover, dark, fog, vfog, sun, wet, snow_ground, rain, snowfall
 const PRESETS := [
@@ -99,6 +100,10 @@ func _apply() -> void:
 	# sun
 	sun.rotation = Vector3(-deg_to_rad(clampf(elev, 2.0, 89.0)), az, 0.0)
 	sun.light_energy = 1.8 * lit * cur[4]
+	# a low sun grazes the ground: push the shadow lookup off the surface a bit
+	# more so the ground doesn't shadow itself in bands (worst at dawn / dusk)
+	sun.shadow_normal_bias = lerpf(2.0, 4.0, golden)   # 2.0 = Godot default (midday unchanged)
+	sun.shadow_bias = lerpf(0.1, 0.25, golden)
 	sun.visible = elev > -1.0
 	sun.light_color = Color(1.0, 0.97, 0.93).lerp(Color(1.0, 0.6, 0.32), golden * 0.85)
 	# moon for night time
@@ -148,6 +153,7 @@ func _apply() -> void:
 	snowfall.emitting = s > 0.03
 	snowfall.amount_ratio = clampf(s, 0.05, 1.0)
 	dark = elev < 5.0 or (dk > 0.5 and elev < 14.0)
+	Gfx.update_light(sun, moon, env, hor.lerp(top, 0.5))   # baked lighting follows the time of day
 
 func clock_text() -> String:
 	var h := int(time_h)

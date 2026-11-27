@@ -36,19 +36,23 @@ func build() -> void:
 	# a small dent became 100x too big and threw the whole body out of sight
 	var shell_mesh := _bake(part[0], to_car * (part[1] as Transform3D))
 	_setup_materials(shell_mesh)
+	if def.get("spoiler", false):
+		var sp = _part(CC96_DIR + "Spoiler/CC96_Spoiler.fbx")
+		if sp != null:
+			# the spoiler file is placed at its own origin: put it on the boot lid.
+			# It's merged into the shell (surface "spoiler") so it dents with the
+			# body and can be torn off like the 350Z's wing.
+			var rear_x := -1.55 if bi != 1 else -1.69
+			var sp_mesh := _bake(sp[0], to_car * Transform3D(Basis(), Vector3(rear_x, 0.56, 0)) * (sp[1] as Transform3D))
+			for i in sp_mesh.get_surface_count():
+				shell_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, sp_mesh.surface_get_arrays(i))
+				var si := shell_mesh.get_surface_count() - 1
+				shell_mesh.surface_set_material(si, sp_mesh.surface_get_material(i))
+				shell_mesh.surface_set_name(si, "spoiler")
 	var shell_mi := MeshInstance3D.new()
 	shell_mi.name = "Shell"
 	shell_mi.mesh = shell_mesh
 	body.add_child(shell_mi)
-	if def.get("spoiler", false):
-		var sp = _part(CC96_DIR + "Spoiler/CC96_Spoiler.fbx")
-		if sp != null:
-			var smi := MeshInstance3D.new()
-			smi.mesh = sp[0]
-			# the spoiler file is placed at its own origin: put it on the boot lid
-			var rear_x := -1.55 if bi != 1 else -1.69
-			smi.transform = to_car * Transform3D(Basis(), Vector3(rear_x, 0.56, 0)) * (sp[1] as Transform3D)
-			body.add_child(smi)
 	# ---- a simple cabin so the inside isn't empty (seats, dash, floor)
 	driver_eye = Vector3(-0.4, 0.86, 0.2)
 	var mb := MB.new()
@@ -161,17 +165,57 @@ func _build_rims(ri: int) -> void:
 		spin.add_child(mi)
 		wheels.append({"pivot": pivot, "spin": spin, "left": left, "front": front})
 
-# dents only (the 350Z's breakable panels don't exist on this model)
-func set_damage_enabled(on: bool, p_car = null) -> void:
-	damage_enabled = on
-	if p_car:
-		car_ref = p_car
-	if shell == null:
-		shell = body.get_node_or_null("Shell")
-	if shell == null:
-		return
-	_apply_dent_overrides(on)
-	repair()
+# ---- damage: the full crumple frame, loose parts and breaking glass of
+# car_damage.gd (car_model.gd's set_damage_enabled), with this model's own
+# parts. The shell's surfaces are named after the file's materials.
+var damage_k := 1.35   # lighter, softer car than the 350Z: crumples deeper, loses parts sooner
+
+func damage_classify(key: String, c: Vector3, n: Vector3) -> String:
+	var ax: float = abs(c.x)
+	match key:
+		"Glass":
+			if abs(n.x) > 0.55:
+				return "win_left" if c.x < 0.0 else "win_right"
+			return "win_front" if c.z < 0.4 else "win_rear"
+		"headlights":
+			return "headlight_left" if c.x < 0.0 else "headlight_right"
+		"rear lights":
+			return "taillight_left" if c.x < 0.0 else "taillight_right"
+		"spoiler":
+			return "wing"
+		"Hood", "Hood2", "Chrome":
+			return "bonnet"
+		"exhaust":
+			return "bumper_rear"
+	# painted body and trim, by where they are on the car
+	if c.z < -1.88 and c.y < 0.5:
+		return "bumper_front"
+	if c.z > 1.98 and c.y < 0.55:
+		return "bumper_rear"
+	if c.z > -2.0 and c.z < -0.95 and ax > 0.55 and abs(n.x) > 0.4 and c.y > 0.18 and c.y < 0.66:
+		return "fender_left" if c.x < 0.0 else "fender_right"
+	if c.z > -0.95 and c.z < 0.75 and c.y > 0.15 and c.y < 0.66 and ax > 0.6 and abs(n.x) > 0.3:
+		return "door_left" if c.x < 0.0 else "door_right"
+	return "body"
+
+# hinge point, hinge axis, opening sign, kind (as car_damage.gd PART_DEF)
+const CC96_PARTS := {
+	"door_left": [Vector3(-0.88, 0.42, -0.92), Vector3.UP, -1.0, "door"],
+	"door_right": [Vector3(0.88, 0.42, -0.92), Vector3.UP, 1.0, "door"],
+	"bonnet": [Vector3(0.0, 0.66, -0.56), Vector3.RIGHT, 1.0, "bonnet"],
+	"bumper_front": [Vector3(0.75, 0.25, -2.05), Vector3.BACK, 1.0, "droop"],
+	"bumper_rear": [Vector3(-0.75, 0.3, 2.15), Vector3.BACK, -1.0, "droop"],
+	"wing": [Vector3(0.5, 0.75, 1.98), Vector3.BACK, 1.0, "droop"],
+	"fender_left": [Vector3(-0.85, 0.4, -0.95), Vector3.UP, 1.0, "fender"],
+	"fender_right": [Vector3(0.85, 0.4, -0.95), Vector3.UP, -1.0, "fender"],
+	"headlight_left": [Vector3(-0.5, 0.39, -2.07), Vector3.UP, 1.0, "loose"],
+	"headlight_right": [Vector3(0.5, 0.39, -2.07), Vector3.UP, 1.0, "loose"],
+	"taillight_left": [Vector3(-0.4, 0.36, 2.2), Vector3.UP, 1.0, "loose"],
+	"taillight_right": [Vector3(0.4, 0.36, 2.2), Vector3.UP, 1.0, "loose"],
+}
+
+func damage_part_defs() -> Dictionary:
+	return CC96_PARTS
 
 # a copy of mesh m with transform xf applied to its vertices, normals and tangents
 static func _bake(m: ArrayMesh, xf: Transform3D) -> ArrayMesh:

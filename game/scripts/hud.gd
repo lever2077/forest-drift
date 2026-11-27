@@ -3,6 +3,8 @@ extends CanvasLayer
 
 const Profile = preload("res://scripts/profile.gd")
 const Updater = preload("res://scripts/updater.gd")
+const Gfx = preload("res://scripts/gfx.gd")
+const CrateRoll = preload("res://scripts/crate_roll.gd")
 
 var car
 var track
@@ -168,6 +170,46 @@ func _row(parent: Control) -> HBoxContainer:
 	parent.add_child(h)
 	return h
 
+# Settings > Codes: type a code, press Redeem (or Enter). Each code works once
+# per save (profile.gd CODES / redeem_code).
+var code_edit: LineEdit
+
+func _build_codes_tab(t: VBoxContainer) -> void:
+	_section(t, "Codes")
+	var r := _row(t)
+	code_edit = LineEdit.new()
+	code_edit.placeholder_text = "Enter a code"
+	code_edit.custom_minimum_size = Vector2(320, 44)
+	code_edit.add_theme_font_size_override("font_size", 20)
+	r.add_child(code_edit)
+	var b := Button.new()
+	b.text = "Redeem"
+	b.focus_mode = Control.FOCUS_NONE
+	b.custom_minimum_size = Vector2(130, 44)
+	b.add_theme_font_size_override("font_size", 20)
+	r.add_child(b)
+	var msg := Label.new()
+	msg.add_theme_font_size_override("font_size", 18)
+	t.add_child(msg)
+	var redeem := func(_t = ""):
+		var res: Array = Profile.redeem_code(code_edit.text)
+		msg.text = res[1]
+		msg.add_theme_color_override("font_color", Color(0.6, 1.0, 0.6) if res[0] else Color(1.0, 0.5, 0.4))
+		if res[0]:
+			code_edit.text = ""
+			_refresh_points()
+		code_edit.release_focus()
+	b.pressed.connect(redeem)
+	code_edit.text_submitted.connect(redeem)
+
+# small grey explanation after a setting
+func _note(row: Control, text: String) -> void:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", 14)
+	l.modulate = Color(1, 1, 1, 0.6)
+	row.add_child(l)
+
 func _opt(items: Array, fmt: String, selected: int) -> OptionButton:
 	var o := OptionButton.new()
 	for it in items:
@@ -286,7 +328,9 @@ func build_settings(p_envc, p_main) -> void:
 	var t_car := _tab(tabs, "Car")
 	var t_disp := _tab(tabs, "Display")
 	var t_audio := _tab(tabs, "Audio")
+	var t_codes := _tab(tabs, "Codes")
 	settings_tabs = tabs
+	_build_codes_tab(t_codes)
 	# --- time of day
 	_section(t_world, "Time of day")
 	var r1 := _row(t_world)
@@ -355,20 +399,64 @@ func build_settings(p_envc, p_main) -> void:
 	grass_opt.custom_minimum_size = Vector2(140, 0)
 	grass_opt.item_selected.connect(func(i): main_node.set_grass(i))
 	r5.add_child(grass_opt)
+	# biome effects: falling leaves / petals / ash, from none up to the normal amount
+	var r5e := _row(t_gfx)
+	var fl := Label.new()
+	fl.text = "Biome effects"
+	fl.add_theme_font_size_override("font_size", 18)
+	r5e.add_child(fl)
+	var fx_slider := HSlider.new()
+	fx_slider.min_value = 0.0
+	fx_slider.max_value = 1.0
+	fx_slider.step = 0.05
+	fx_slider.value = main_node.biome_fx
+	fx_slider.custom_minimum_size = Vector2(220, 30)
+	fx_slider.focus_mode = Control.FOCUS_NONE
+	fx_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	r5e.add_child(fx_slider)
+	var fx_val := Label.new()
+	fx_val.text = "%d%%" % int(round(main_node.biome_fx * 100.0))
+	fx_val.custom_minimum_size = Vector2(56, 0)
+	fx_val.add_theme_font_size_override("font_size", 18)
+	r5e.add_child(fx_val)
+	fx_slider.value_changed.connect(func(v):
+		fx_val.text = "%d%%" % int(round(v * 100.0))
+		main_node.set_biome_fx(v))
+	_note(r5e, "falling leaves, petals and ash (100% = normal)")
+	# detail: Low = smooth flat colours and round ball trees (slow computers)
+	var r5d := _row(t_gfx)
+	var det_l := Label.new()
+	det_l.text = "Detail"
+	det_l.add_theme_font_size_override("font_size", 18)
+	r5d.add_child(det_l)
+	var det_opt := _opt(["High", "Low (smooth)"], "", 1 if Gfx.low else 0)
+	det_opt.custom_minimum_size = Vector2(170, 0)
+	det_opt.item_selected.connect(func(i): main_node.set_low_detail(i == 1))
+	r5d.add_child(det_opt)
+	_note(r5d, "Low: smooth textures, round trees, fewer effects - for slow PCs (reloads the map)")
+	# baked lighting: light and shadows stored in the world's colours, drawn unshaded
 	var r5b := _row(t_gfx)
 	var bl := Label.new()
 	bl.text = "Baked lighting"
 	bl.add_theme_font_size_override("font_size", 18)
 	r5b.add_child(bl)
+	var bk_opt := _opt(["Off", "On"], "", 1 if Gfx.baked else 0)
+	bk_opt.custom_minimum_size = Vector2(170, 0)
+	bk_opt.item_selected.connect(func(i): main_node.set_baked(i == 1))
+	r5b.add_child(bk_opt)
+	_note(r5b, "lighting is baked into the textures - more FPS (reloads the map)")
+	# light bounces (SDFGI): the expensive real-time version, off with baked lighting
+	var r5c := _row(t_gfx)
+	var gl2 := Label.new()
+	gl2.text = "Light bounces"
+	gl2.add_theme_font_size_override("font_size", 18)
+	r5c.add_child(gl2)
 	var gi_opt := _opt(["Off", "Low", "High"], "", clampi(main_node.gi_quality, 0, 2))
-	gi_opt.custom_minimum_size = Vector2(140, 0)
+	gi_opt.custom_minimum_size = Vector2(170, 0)
 	gi_opt.item_selected.connect(func(i): main_node.set_gi(i))
-	r5b.add_child(gi_opt)
-	var bn := Label.new()
-	bn.text = "light bounces off the ground and trees - High costs more FPS"
-	bn.add_theme_font_size_override("font_size", 14)
-	bn.modulate = Color(1, 1, 1, 0.6)
-	r5b.add_child(bn)
+	gi_opt.disabled = Gfx.baked
+	r5c.add_child(gi_opt)
+	_note(r5c, "real-time light bouncing off the ground and trees - costs FPS" + ("  (off with baked lighting)" if Gfx.baked else ""))
 	# --- car
 	_section(t_car, "Car")
 	var r6 := _row(t_car)
@@ -523,7 +611,7 @@ func _toggle_panel(p: Control) -> void:
 	_layout()
 
 func _menu_panels() -> Array:
-	return [settings_panel, controls_panel, cache_panel, inventory_panel].filter(func(x): return x != null)
+	return [settings_panel, controls_panel, cache_panel, inventory_panel, mp_panel].filter(func(x): return x != null)
 
 func close_menu_panels() -> void:
 	for x in _menu_panels():
@@ -569,10 +657,15 @@ func build_menu(entries: Array, current: int) -> void:
 	title.add_theme_color_override("font_color", Color(1.0, 0.6, 0.2))
 	v.add_child(title)
 	menu_status = Label.new()
-	menu_status.text = "Choose a map   (Enter drives the last one you played,  Esc while driving comes back here)"
+	menu_status.text = "MAP"
 	menu_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	menu_status.add_theme_font_size_override("font_size", 18)
+	menu_status.add_theme_font_size_override("font_size", 24)
+	menu_status.add_theme_color_override("font_color", Color(1.0, 0.6, 0.2))
 	v.add_child(menu_status)
+	# step 1: the maps. Picking one swaps this list for the biome grid (step 2)
+	map_list = VBoxContainer.new()
+	map_list.add_theme_constant_override("separation", 10)
+	v.add_child(map_list)
 	var first_btn: Button = null
 	for e in entries:
 		var idx: int = e["index"]
@@ -583,10 +676,10 @@ func build_menu(entries: Array, current: int) -> void:
 		b.add_theme_font_size_override("font_size", 21)
 		if idx == current:
 			b.add_theme_color_override("font_color", Color(0.6, 1.0, 0.6))
-		v.add_child(b)
+		map_list.add_child(b)
 		if first_btn == null or idx == current:
 			first_btn = b
-		b.pressed.connect(func(): _pick(idx, e["name"]))
+		b.pressed.connect(func(): _show_biome_step(idx, e["name"]))
 	var row := _row(v)
 	menu_vbox = v
 	menu_tools_row = row
@@ -618,6 +711,15 @@ func build_menu(entries: Array, current: int) -> void:
 	inv_btn.add_theme_font_size_override("font_size", 19)
 	inv_btn.pressed.connect(func(): _toggle_shop_panel(inventory_panel))
 	row2.add_child(inv_btn)
+	# third row: online play
+	var row2b := _row(v)
+	row2b.alignment = BoxContainer.ALIGNMENT_CENTER
+	var mp_btn := Button.new()
+	mp_btn.text = "Multiplayer"
+	mp_btn.custom_minimum_size = Vector2(594, 44)
+	mp_btn.add_theme_font_size_override("font_size", 19)
+	mp_btn.pressed.connect(func(): _toggle_panel(mp_panel))
+	row2b.add_child(mp_btn)
 	menu_points_lbl = Label.new()
 	menu_points_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	menu_points_lbl.add_theme_font_size_override("font_size", 20)
@@ -649,9 +751,17 @@ func build_menu(entries: Array, current: int) -> void:
 			Updater.checked = false   # ask GitHub again
 			updater.check())
 	updater.check()
+	# key hints along the bottom
+	var keys := Label.new()
+	keys.text = "Esc - Menu   |   Enter - Previous Map Visited"
+	keys.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	keys.add_theme_font_size_override("font_size", 16)
+	keys.add_theme_color_override("font_color", Color(0.75, 0.78, 0.75))
+	v.add_child(keys)
 	add_child(menu)
 	cache_panel = _build_shop_panel("CACHES")
 	inventory_panel = _build_shop_panel("INVENTORY")
+	mp_panel = _build_mp_panel()
 	_layout()
 	if first_btn:
 		first_btn.grab_focus()
@@ -731,8 +841,118 @@ func _build_shop_panel(title_text: String) -> PanelContainer:
 	p.set_meta("points", pts)
 	return p
 
+# ---------------------------------------------------------------- multiplayer panel
+var mp_panel: PanelContainer
+
+func _build_mp_panel() -> PanelContainer:
+	var p := _build_shop_panel("MULTIPLAYER")
+	(p.get_meta("points") as Label).visible = false
+	var list: VBoxContainer = p.get_meta("list")
+	var cfg := ConfigFile.new()
+	cfg.load("user://net.cfg")
+	Net.my_name = String(cfg.get_value("net", "name", Net.my_name))
+	var save := func(k: String, v):
+		cfg.set_value("net", k, v)
+		cfg.save("user://net.cfg")
+	# name
+	var r1 := _row(list)
+	var nl := Label.new()
+	nl.text = "Your name"
+	nl.custom_minimum_size = Vector2(120, 0)
+	nl.add_theme_font_size_override("font_size", 19)
+	r1.add_child(nl)
+	var name_edit := LineEdit.new()
+	name_edit.text = Net.my_name
+	name_edit.max_length = 20
+	name_edit.custom_minimum_size = Vector2(300, 42)
+	name_edit.add_theme_font_size_override("font_size", 19)
+	name_edit.text_changed.connect(func(t):
+		Net.my_name = t if t.strip_edges() != "" else "Player"
+		save.call("name", Net.my_name))
+	r1.add_child(name_edit)
+	# host
+	var r2 := _row(list)
+	var host_btn := Button.new()
+	host_btn.text = "Host a game"
+	host_btn.custom_minimum_size = Vector2(220, 46)
+	host_btn.add_theme_font_size_override("font_size", 19)
+	host_btn.focus_mode = Control.FOCUS_NONE
+	r2.add_child(host_btn)
+	_note(r2, "you pick the map, friends join you (port 7777)")
+	# join
+	var r3 := _row(list)
+	var addr := LineEdit.new()
+	addr.placeholder_text = "host's address, e.g. 192.168.1.20 or abc.playit.gg:12345"
+	addr.text = String(cfg.get_value("net", "address", ""))
+	addr.custom_minimum_size = Vector2(440, 46)
+	addr.add_theme_font_size_override("font_size", 18)
+	r3.add_child(addr)
+	var join_btn := Button.new()
+	join_btn.text = "Join"
+	join_btn.custom_minimum_size = Vector2(120, 46)
+	join_btn.add_theme_font_size_override("font_size", 19)
+	join_btn.focus_mode = Control.FOCUS_NONE
+	r3.add_child(join_btn)
+	# status, players, leave
+	var st := Label.new()
+	st.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	st.custom_minimum_size = Vector2(640, 0)
+	st.add_theme_font_size_override("font_size", 18)
+	st.add_theme_color_override("font_color", Color(0.6, 1.0, 0.6))
+	list.add_child(st)
+	var pl := Label.new()
+	pl.add_theme_font_size_override("font_size", 17)
+	list.add_child(pl)
+	var leave := Button.new()
+	leave.text = "Leave / stop hosting"
+	leave.custom_minimum_size = Vector2(240, 42)
+	leave.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	leave.add_theme_font_size_override("font_size", 18)
+	leave.focus_mode = Control.FOCUS_NONE
+	list.add_child(leave)
+	var help := Label.new()
+	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	help.custom_minimum_size = Vector2(640, 0)
+	help.add_theme_font_size_override("font_size", 14)
+	help.modulate = Color(1, 1, 1, 0.65)
+	help.text = "Same Wi-Fi: friends type the host's local IP (ipconfig > IPv4). Over the internet, for free: " \
+		+ "the host runs playit.gg (UDP tunnel to port 7777) and shares its address, or everyone joins the " \
+		+ "same Tailscale / Radmin VPN network and uses the host's address there."
+	list.add_child(help)
+	var refresh := func():
+		if not is_instance_valid(st):
+			return
+		st.text = Net.status
+		var names := [Net.my_name + " (you)"]
+		for id in Net.players.keys():
+			names.append(String(Net.players[id].get("name", "Player")))
+		pl.text = "Players: " + ", ".join(names) if Net.is_online() else ""
+		leave.disabled = not Net.is_online()
+		host_btn.disabled = Net.is_online()
+		join_btn.disabled = Net.is_online()
+	host_btn.pressed.connect(func():
+		Net.host()
+		refresh.call())
+	var do_join := func(_t = ""):
+		save.call("address", addr.text)
+		Net.join(addr.text)
+		addr.release_focus()
+		refresh.call()
+	join_btn.pressed.connect(do_join)
+	addr.text_submitted.connect(do_join)
+	leave.pressed.connect(func():
+		Net.leave()
+		refresh.call())
+	Net.status_changed.connect(func(_t): refresh.call())
+	Net.players_changed.connect(func(): refresh.call())
+	refresh.call()
+	return p
+
 func _toggle_shop_panel(p: PanelContainer) -> void:
 	if p == null:
+		return
+	if p == mp_panel:
+		_toggle_panel(p)
 		return
 	if not p.visible:
 		cache_result = ""
@@ -779,7 +999,7 @@ func _fill_shop_panel(p: PanelContainer) -> void:
 			res.alignment = BoxContainer.ALIGNMENT_CENTER
 			res.add_theme_constant_override("separation", 12)
 			list.add_child(res)
-			res.add_child(_swatch(Profile.skin_color(cache_result), 34))
+			res.add_child(_swatch(Profile.skin_color(cache_result), 34, Profile.skin_neon(cache_result)))
 			var rl := Label.new()
 			rl.text = "You got:  %s%s" % [Profile.item_name(cache_result), "   (duplicate)" if Profile.item_count(cache_result) > 1 else ""]
 			rl.add_theme_font_size_override("font_size", 24)
@@ -791,10 +1011,7 @@ func _fill_shop_panel(p: PanelContainer) -> void:
 		for c in Profile.CACHES:
 			var cid: String = c["id"]
 			var price := int(c["price"])
-			var names := []
-			for iid in c["items"]:
-				names.append(Profile.item_name(iid))
-			# a card: picture | name, price, contents | Open
+			# a card: picture | name, price | Open
 			var r := HBoxContainer.new()
 			r.add_theme_constant_override("separation", 18)
 			list.add_child(r)
@@ -802,6 +1019,8 @@ func _fill_shop_panel(p: PanelContainer) -> void:
 			art.custom_minimum_size = Vector2(150, 150)
 			if c.has("tint"):
 				art.tint = c["tint"]
+			art.style = cid
+			art.label = String(c["name"]).replace(" Cache", "")
 			r.add_child(art)
 			var info := VBoxContainer.new()
 			info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -817,13 +1036,6 @@ func _fill_shop_panel(p: PanelContainer) -> void:
 			pl.add_theme_font_size_override("font_size", 20)
 			pl.add_theme_color_override("font_color", Color(1.0, 0.85, 0.35))
 			info.add_child(pl)
-			var dl := Label.new()
-			dl.text = "%s\nContains: %s" % [c["info"], ", ".join(names)]
-			dl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-			dl.custom_minimum_size = Vector2(330, 0)
-			dl.add_theme_font_size_override("font_size", 15)
-			dl.add_theme_color_override("font_color", Color(0.78, 0.82, 0.78))
-			info.add_child(dl)
 			var b := Button.new()
 			b.text = "Open"
 			b.focus_mode = Control.FOCUS_NONE
@@ -835,8 +1047,13 @@ func _fill_shop_panel(p: PanelContainer) -> void:
 			b.pressed.connect(func():
 				var won := Profile.open_cache(cid)
 				if won != "":
-					cache_result = won
-					_fill_shop_panel(p))
+					_fill_shop_panel(p)   # points go down straight away
+					# the roll: items scroll past and stop on what you won
+					var roll := CrateRoll.new()
+					add_child(roll)
+					roll.setup(cid, won, String(c["name"]), func():
+						cache_result = won
+						_fill_shop_panel(p)))
 			r.add_child(b)
 	else:
 		# tabs: Skins | Cars
@@ -876,15 +1093,46 @@ func _fill_shop_panel(p: PanelContainer) -> void:
 				r.add_child(b)
 			_empty_note(list, "Your car is used on the next map you drive. Skins paint any car.")
 			return
-		# the stock skin first (always owned), then everything in the inventory
-		var ids := [Profile.STOCK_SKIN]
+		# sort: A-Z, Rarity (best first) or Crate (Basic, Neon, then the rest)
+		var sr := HBoxContainer.new()
+		sr.alignment = BoxContainer.ALIGNMENT_END
+		sr.add_theme_constant_override("separation", 10)
+		list.add_child(sr)
+		var sl := Label.new()
+		sl.text = "Sort by"
+		sl.add_theme_font_size_override("font_size", 18)
+		sr.add_child(sl)
+		var so := _opt(["A-Z", "Rarity", "Crate"], "", inv_sort)
+		so.custom_minimum_size = Vector2(140, 0)
+		so.item_selected.connect(func(i):
+			inv_sort = i
+			_fill_shop_panel(p))
+		sr.add_child(so)
+		# every owned skin (Grey is always owned), sorted together
+		var owned := [Profile.STOCK_SKIN]
 		for id in Profile.inventory.keys():
-			ids.append(id)
+			owned.append(String(id))
+		owned.sort_custom(func(a, b): return _inv_less(a, b))
+		var ids := owned
+		var last_group := ""
 		for id in ids:
 			var sid: String = id
+			if inv_sort == 2:
+				var grp := _crate_group(sid)
+				if grp != last_group:
+					last_group = grp
+					var gl := Label.new()
+					gl.text = grp
+					gl.add_theme_font_size_override("font_size", 20)
+					gl.add_theme_color_override("font_color", Color(1.0, 0.7, 0.3))
+					list.add_child(gl)
 			var r := _item_row(list, {"name": Profile.item_name(sid)}, "" if sid == Profile.STOCK_SKIN else "x%d" % Profile.item_count(sid))
-			if Profile.SKINS.has(sid):
-				r.add_child(_swatch(Profile.skin_color(sid), 30))
+			# the name in its rarity colour (Grey and retired skins stay white)
+			var tier := Profile.skin_tier(sid)
+			if tier >= 0:
+				(r.get_child(0) as Label).add_theme_color_override("font_color", (Profile.RARITY_COLORS[tier] as Color).lightened(0.15))
+			if Profile.is_skin(sid):
+				r.add_child(_swatch(Profile.skin_color(sid), 30, Profile.skin_neon(sid)))
 				r.move_child(r.get_child(r.get_child_count() - 1), 0)
 				var b := Button.new()
 				var on: bool = Profile.equipped_skin == sid
@@ -902,78 +1150,217 @@ func _fill_shop_panel(p: PanelContainer) -> void:
 
 var cache_result := ""
 var inv_tab := 0   # Inventory: 0 skins, 1 cars
+static var inv_sort := 1   # Inventory skins: 0 A-Z, 1 rarity, 2 crate (kept across map loads)
 
-# picture of a cache: a moulded plastic storage case with snap latches and a
-# carry handle, drawn in code. `tint` is the plastic colour so later caches can
-# look different.
+# which crate a skin comes from, for the Crate sort's headings
+func _crate_group(id: String) -> String:
+	if Profile.item_tier("basic", id) >= 0:
+		return "Basic Cache"
+	if Profile.item_tier("neon", id) >= 0:
+		return "Neon Cache"
+	return "Other"
+
+func _inv_less(a: String, b: String) -> bool:
+	var na := Profile.item_name(a).to_lower()
+	var nb := Profile.item_name(b).to_lower()
+	match inv_sort:
+		1:   # rarity, best first, then A-Z
+			var ta := Profile.skin_tier(a)
+			var tb := Profile.skin_tier(b)
+			if ta != tb:
+				return ta > tb
+		2:   # crate (Basic, Neon, other), then rarity, then A-Z
+			var order := ["Basic Cache", "Neon Cache", "Other"]
+			var ga := order.find(_crate_group(a))
+			var gb := order.find(_crate_group(b))
+			if ga != gb:
+				return ga < gb
+			var ta2 := Profile.skin_tier(a)
+			var tb2 := Profile.skin_tier(b)
+			if ta2 != tb2:
+				return ta2 > tb2
+	return na < nb
+
+# picture of a cache, drawn in code: a rugged storage crate seen from above
+# and to one side - shaded faces, metal corner guards with rivets, a carry
+# handle, snap latches, ribbed sides and a stencilled name plate.
+# style "basic": tinted moulded plastic. style "neon": a black case with
+# glowing neon tubes along its edges in the tint colour.
 class CacheArt extends Control:
 	var tint := Color(1.0, 0.55, 0.12)
+	var style := "basic"
+	var label := ""
 
-	func _rbox(r: Rect2, c: Color, rad: float, border := Color(0, 0, 0, 0), bw := 0) -> void:
-		var sb := StyleBoxFlat.new()
-		sb.bg_color = c
-		sb.set_corner_radius_all(int(rad))
-		sb.anti_aliasing = true
-		if bw > 0:
-			sb.border_color = border
-			sb.set_border_width_all(bw)
-		draw_style_box(sb, r)
+	# crate layout (fractions of the picture): front face L..R x T..B, lid/base
+	# seam at S, depth offset D (up and to the right)
+	const L := 0.12
+	const R := 0.72
+	const T := 0.42
+	const S := 0.56
+	const B := 0.86
+	const D := Vector2(0.15, -0.11)
+
+	func _p(x: float, y: float) -> Vector2:
+		return Vector2(x * size.x, y * size.y)
+
+	func _bp(x: float, y: float) -> Vector2:   # same point on the back face
+		return Vector2((x + D.x) * size.x, (y + D.y) * size.y)
+
+	func _tc(u: float, v: float) -> Vector2:   # on the lid's top: u across, v into the depth
+		return Vector2((L + (R - L) * u + D.x * v) * size.x, (T + D.y * v) * size.y)
+
+	# filled polygon shaded from c_top (first two points) to c_bot (the rest)
+	func _face(pts: Array, c_top: Color, c_bot: Color, outline := Color(0, 0, 0, 0)) -> void:
+		var pv := PackedVector2Array()
+		var cv := PackedColorArray()
+		for i in pts.size():
+			pv.append(pts[i])
+			cv.append(c_top if i < 2 else c_bot)
+		draw_polygon(pv, cv)
+		if outline.a > 0.0:
+			var ol := pv.duplicate()
+			ol.append(pv[0])
+			draw_polyline(ol, outline, 2.0, true)
+
+	func _neon_line(a: Vector2, b: Vector2, c: Color) -> void:
+		draw_line(a, b, Color(c.r, c.g, c.b, 0.08), 9.0, true)
+		draw_line(a, b, Color(c.r, c.g, c.b, 0.15), 6.0, true)
+		draw_line(a, b, Color(c.r, c.g, c.b, 0.4), 3.5, true)
+		draw_line(a, b, c.lightened(0.6), 1.6, true)
+
+	func _rivet(p: Vector2, r: float) -> void:
+		draw_circle(p, r, Color(0.22, 0.23, 0.25))
+		draw_circle(p, r * 0.75, Color(0.62, 0.64, 0.67))
+		draw_circle(p + Vector2(-r * 0.25, -r * 0.25), r * 0.3, Color(0.96, 0.97, 0.99))
 
 	func _draw() -> void:
 		var w := size.x
 		var h := size.y
-		var cx := w * 0.5
-		# soft glow behind and a shadow under it
-		for k in 6:
-			draw_circle(Vector2(cx, h * 0.5), w * (0.48 - k * 0.05), Color(tint.r, tint.g, tint.b, 0.03 + k * 0.01))
-		draw_set_transform(Vector2(cx, h * 0.87), 0.0, Vector2(1.0, 0.2))
-		draw_circle(Vector2.ZERO, w * 0.38, Color(0, 0, 0, 0.5))
+		var neon := style == "neon"
+		# ---- light behind, shadow under
+		var glow_a := 0.06 if neon else 0.035
+		for k in 8:
+			draw_circle(_p(0.5, 0.52), w * (0.5 - k * 0.045), Color(tint.r, tint.g, tint.b, glow_a + k * 0.008))
+		if neon:
+			for k in 12:
+				var ang := TAU * k / 12.0 + 0.2
+				draw_line(_p(0.5, 0.52), _p(0.5, 0.52) + Vector2(cos(ang), sin(ang)) * w * 0.5, Color(tint.r, tint.g, tint.b, 0.07), 3.0, true)
+		draw_set_transform(_p(0.47, 0.9), 0.0, Vector2(1.0, 0.18))
+		draw_circle(Vector2.ZERO, w * 0.42, Color(0, 0, 0, 0.55))
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-		var plastic := tint
-		var dark := tint.darkened(0.45)
-		var edge := tint.darkened(0.65)
-		var bx := w * 0.13
-		var bw := w * 0.74
-		# top face of the lid (seen from slightly above), a lighter rounded slab
-		var top := Rect2(bx + w * 0.03, h * 0.26, bw - w * 0.06, h * 0.12)
-		_rbox(top, plastic.lightened(0.18), w * 0.05, edge, 2)
-		# carry handle moulded into the lid
-		_rbox(Rect2(cx - w * 0.16, h * 0.2, w * 0.32, h * 0.09), dark, w * 0.04, edge, 2)
-		_rbox(Rect2(cx - w * 0.11, h * 0.225, w * 0.22, h * 0.04), Color(0.06, 0.06, 0.07), w * 0.02)
-		# lid front
-		var lid := Rect2(bx, h * 0.35, bw, h * 0.15)
-		_rbox(lid, plastic, w * 0.04, edge, 2)
-		# seam between lid and base
-		draw_line(Vector2(bx + w * 0.02, h * 0.505), Vector2(bx + bw - w * 0.02, h * 0.505), Color(0, 0, 0, 0.55), 3.0)
-		# base: slightly darker, with moulded ribs
-		var base := Rect2(bx + w * 0.01, h * 0.51, bw - w * 0.02, h * 0.33)
-		_rbox(base, plastic.darkened(0.12), w * 0.05, edge, 2)
-		for fx in [0.3, 0.5, 0.7]:
-			var x: float = w * fx
-			_rbox(Rect2(x - w * 0.025, h * 0.56, w * 0.05, h * 0.24), plastic.darkened(0.22), w * 0.02)
-			draw_line(Vector2(x - w * 0.02, h * 0.565), Vector2(x - w * 0.02, h * 0.79), plastic.lightened(0.1), 1.5)
-		# rubber feet
-		for fx in [0.22, 0.78]:
-			_rbox(Rect2(w * fx - w * 0.06, h * 0.835, w * 0.12, h * 0.03), Color(0.08, 0.08, 0.09), w * 0.015)
-		# snap latches over the seam (black plastic with a coloured tab)
-		for fx in [0.2, 0.8]:
-			var lx: float = w * fx
-			_rbox(Rect2(lx - w * 0.055, h * 0.43, w * 0.11, h * 0.15), Color(0.1, 0.1, 0.11), w * 0.025, Color(0, 0, 0), 1)
-			_rbox(Rect2(lx - w * 0.035, h * 0.455, w * 0.07, h * 0.05), tint.lightened(0.25), w * 0.015)
-		# glossy highlight along the top of the lid and the base
-		draw_line(Vector2(bx + w * 0.07, h * 0.37), Vector2(bx + bw - w * 0.07, h * 0.37), Color(1, 1, 1, 0.45), 2.0)
-		draw_line(Vector2(bx + w * 0.08, h * 0.285), Vector2(cx - w * 0.18, h * 0.285), Color(1, 1, 1, 0.35), 2.0)
-		draw_line(Vector2(bx + w * 0.06, h * 0.53), Vector2(bx + w * 0.06, h * 0.8), Color(1, 1, 1, 0.18), 3.0)
-		# label plate in the middle of the lid with a glowing "?"
-		var lp := Rect2(cx - w * 0.12, h * 0.385, w * 0.24, h * 0.09)
-		_rbox(lp, Color(0.92, 0.92, 0.9), w * 0.015, edge, 1)
+		# ---- colours
+		var body := Color(0.075, 0.08, 0.095) if neon else tint
+		var hi := body.lightened(0.12 if neon else 0.22)
+		var lo := body.darkened(0.35)
+		var edge := Color(0.02, 0.02, 0.03)
+		var metal_hi := Color(0.86, 0.88, 0.9)
+		var metal_lo := Color(0.42, 0.44, 0.47)
+		# ---- side face (darker): lid band and base band
+		_face([_p(R, T), _bp(R, T), _bp(R, S), _p(R, S)], lo.lightened(0.08), lo, edge)
+		_face([_p(R, S), _bp(R, S), _bp(R, B), _p(R, B)], lo.darkened(0.05), lo.darkened(0.25), edge)
+		# ---- top of the lid with a raised centre panel
+		_face([_p(L, T), _p(R, T), _bp(R, T), _bp(L, T)], hi, hi.lightened(0.08), edge)
+		_face([_tc(0.12, 0.2), _tc(0.88, 0.2), _tc(0.88, 0.8), _tc(0.12, 0.8)], hi.lightened(0.06), hi.darkened(0.04), body.darkened(0.25))
+		# carry handle: two posts and a grip bar
+		for u in [0.32, 0.68]:
+			_face([_tc(u - 0.035, 0.42), _tc(u + 0.035, 0.42), _tc(u + 0.035, 0.58), _tc(u - 0.035, 0.58)], lo, lo, edge)
+		var g0 := _tc(0.3, 0.5) + Vector2(0, -h * 0.05)
+		var g1 := _tc(0.7, 0.5) + Vector2(0, -h * 0.05)
+		for u in [0.32, 0.68]:
+			draw_line(_tc(u, 0.5), Vector2(lerpf(g0.x, g1.x, (u - 0.3) / 0.4), g0.y), Color(0.13, 0.13, 0.15), h * 0.03, true)
+		draw_line(g0, g1, edge, h * 0.055, true)
+		draw_line(g0, g1, Color(0.16, 0.16, 0.18), h * 0.04, true)
+		draw_line(g0 + Vector2(0, -h * 0.01), g1 + Vector2(0, -h * 0.01), Color(1, 1, 1, 0.18), h * 0.008, true)
+		# ---- front: lid band and base
+		_face([_p(L, T), _p(R, T), _p(R, S), _p(L, S)], body.lightened(0.08), body, edge)
+		_face([_p(L, S), _p(R, S), _p(R, B), _p(L, B)], body.darkened(0.06), body.darkened(0.3), edge)
+		draw_line(_p(L, S), _p(R, S), Color(0, 0, 0, 0.6), 3.0, true)
+		draw_line(_p(R, S), _bp(R, S), Color(0, 0, 0, 0.6), 3.0, true)
+		# moulded ribs on the base, front and side
+		for x in [0.24, 0.36, 0.48, 0.6]:
+			draw_line(_p(x, S + 0.04), _p(x, B - 0.04), Color(0, 0, 0, 0.35), 3.0, true)
+			draw_line(_p(x + 0.008, S + 0.04), _p(x + 0.008, B - 0.04), Color(1, 1, 1, 0.12), 1.5, true)
+		for k in 3:
+			var t := (k + 1) / 4.0
+			draw_line(_p(R, S + 0.04).lerp(_bp(R, S + 0.04), t), _p(R, B - 0.04).lerp(_bp(R, B - 0.04), t), Color(0, 0, 0, 0.4), 2.5, true)
+		# ---- metal corner guards with rivets
+		var cg := 0.07
+		for cx in [L, R]:
+			var sx: float = 1.0 if cx == L else -1.0
+			for cy in [T, B]:
+				var sy: float = 1.0 if cy == T else -1.0
+				var p0 := _p(cx, cy)
+				var px := _p(cx + sx * cg, cy)
+				var py := _p(cx, cy + sy * cg * 1.3)
+				_face([p0, px, px + (py - p0) * 0.45, p0 + (px - p0) * 0.45 + (py - p0) * 0.45, py], metal_hi, metal_lo, edge)
+				_rivet(p0 + (px - p0) * 0.3 + (py - p0) * 0.3, w * 0.012)
+		for cy in [T, B]:
+			var q0 := _bp(R, cy)
+			var sy2: float = 1.0 if cy == T else -1.0
+			var qd := Vector2(0, sy2 * h * cg * 1.3)
+			var qs := q0.lerp(_p(R, cy), 0.28)
+			_face([q0, qs, qs + qd, q0 + qd], metal_hi.darkened(0.15), metal_lo.darkened(0.1), edge)
+		# ---- snap latches across the seam
+		for x0 in [0.2, 0.64]:
+			_face([_p(x0 - 0.045, S - 0.06), _p(x0 + 0.045, S - 0.06), _p(x0 + 0.045, S + 0.08), _p(x0 - 0.045, S + 0.08)], metal_hi, metal_lo, edge)
+			_face([_p(x0 - 0.03, S - 0.035), _p(x0 + 0.03, S - 0.035), _p(x0 + 0.03, S + 0.05), _p(x0 - 0.03, S + 0.05)], Color(0.12, 0.12, 0.13), Color(0.05, 0.05, 0.06))
+			var tab := tint if neon else tint.lightened(0.3)
+			_face([_p(x0 - 0.022, S + 0.005), _p(x0 + 0.022, S + 0.005), _p(x0 + 0.022, S + 0.035), _p(x0 - 0.022, S + 0.035)], tab, tab.darkened(0.2))
+			_rivet(_p(x0, S - 0.045), w * 0.009)
+		# ---- name plate with a stencilled name
+		var np0 := _p(0.27, S + 0.1)
+		var plate := Rect2(np0, _p(0.57, S + 0.2) - np0)
+		var psb := StyleBoxFlat.new()
+		psb.bg_color = Color(0.08, 0.09, 0.1) if neon else Color(0.9, 0.9, 0.86)
+		psb.border_color = tint if neon else edge
+		psb.set_border_width_all(2)
+		psb.set_corner_radius_all(3)
+		draw_style_box(psb, plate)
+		for rx in [plate.position.x + 5.0, plate.end.x - 5.0]:
+			_rivet(Vector2(rx, plate.position.y + plate.size.y * 0.5), w * 0.007)
 		var f := ThemeDB.fallback_font
-		var fs := int(h * 0.08)
-		var q := "?"
-		var qs := f.get_string_size(q, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
-		draw_string(f, Vector2(cx - qs.x * 0.5, lp.position.y + lp.size.y * 0.5 + fs * 0.35), q, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, tint.darkened(0.3))
+		var txt := label.to_upper() if label != "" else "CACHE"
+		var fs := int(h * 0.07)
+		while fs > 6 and f.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x > plate.size.x - 18.0:
+			fs -= 1
+		var ts := f.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
+		var tpos := Vector2(plate.position.x + (plate.size.x - ts.x) * 0.5, plate.position.y + plate.size.y * 0.5 + fs * 0.36)
+		if neon:
+			for o in [Vector2(-1, 0), Vector2(1, 0), Vector2(0, -1), Vector2(0, 1)]:
+				draw_string(f, tpos + o * 1.5, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(tint.r, tint.g, tint.b, 0.45))
+			draw_string(f, tpos, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, tint.lightened(0.6))
+		else:
+			draw_string(f, tpos, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0.12, 0.12, 0.13))
+		# "?" emblem on the lid front
+		var qf := int(h * 0.1)
+		var qpos := _p(0.42, S - 0.025)
+		var qsz := f.get_string_size("?", HORIZONTAL_ALIGNMENT_LEFT, -1, qf)
+		draw_circle(qpos + Vector2(0, -qf * 0.3), qf * 0.5, Color(0, 0, 0, 0.35))
+		draw_string(f, qpos + Vector2(-qsz.x * 0.5, 0), "?", HORIZONTAL_ALIGNMENT_LEFT, -1, qf, tint.lightened(0.45) if neon else Color(1, 1, 1, 0.92))
+		# glossy highlights
+		draw_line(_p(L + 0.03, T + 0.015), _p(R - 0.03, T + 0.015), Color(1, 1, 1, 0.15 if neon else 0.35), 2.0, true)
+		draw_line(_p(L + 0.02, S + 0.05), _p(L + 0.02, B - 0.06), Color(1, 1, 1, 0.16), 3.0, true)
+		# ---- neon tubes along every outer edge, and sparkles
+		if neon:
+			var edges := [[_p(L, T), _p(R, T)], [_p(R, T), _bp(R, T)], [_bp(R, T), _bp(L, T)], [_bp(L, T), _p(L, T)],
+				[_p(L, T), _p(L, B)], [_p(R, T), _p(R, B)], [_bp(R, T), _bp(R, B)],
+				[_p(L, B), _p(R, B)], [_p(R, B), _bp(R, B)], [_p(L, S), _p(R, S)], [_p(R, S), _bp(R, S)]]
+			for e in edges:
+				_neon_line(e[0], e[1], tint)
+			var rng := RandomNumberGenerator.new()
+			rng.seed = 7
+			for k in 7:
+				var sp := _p(rng.randf_range(0.05, 0.95), rng.randf_range(0.08, 0.35))
+				var sz := w * rng.randf_range(0.008, 0.018)
+				draw_line(sp - Vector2(sz, 0), sp + Vector2(sz, 0), tint.lightened(0.6), 1.5, true)
+				draw_line(sp - Vector2(0, sz), sp + Vector2(0, sz), tint.lightened(0.6), 1.5, true)
 
-func _swatch(c: Color, s: float) -> ColorRect:
+# neon skins show their full-brightness glow colour
+func _swatch(c: Color, s: float, neon := false) -> ColorRect:
+	if neon:
+		var m: float = max(c.r, max(c.g, c.b), 0.001)
+		if m >= 0.05:   # (Neon Black stays black)
+			c = Color(c.r / m, c.g / m, c.b / m)
 	var cr := ColorRect.new()
 	cr.color = c
 	cr.custom_minimum_size = Vector2(s, s)
@@ -988,17 +1375,17 @@ var biome_info: Label
 func build_biome_picker(names: Array, infos: Array, current: String, main_node) -> void:
 	if menu_vbox == null:
 		return
+	# step 2 of the start screen (hidden until a map is picked): pick the biome
+	# and the map starts in it
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 6)
-	var head := Label.new()
-	head.text = "BIOME"
-	head.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	head.add_theme_font_size_override("font_size", 18)
-	head.add_theme_color_override("font_color", Color(1.0, 0.6, 0.2))
-	box.add_child(head)
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 6)
+	box.add_theme_constant_override("separation", 8)
+	box.visible = false
+	biome_box = box
+	# a grid, four to a row (one long row didn't fit 11 biomes)
+	var row := GridContainer.new()
+	row.columns = 4
+	row.add_theme_constant_override("h_separation", 6)
+	row.add_theme_constant_override("v_separation", 6)
 	box.add_child(row)
 	biome_info = Label.new()
 	biome_info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -1023,16 +1410,54 @@ func build_biome_picker(names: Array, infos: Array, current: String, main_node) 
 			biome_info.text = _biome_text(nm, info)
 		b.pressed.connect(func():
 			biome_info.text = _biome_text(nm, info)
-			main_node.set_biome(nm))
+			main_node.set_biome(nm)
+			_pick(picked_map, picked_name))
+		b.mouse_entered.connect(func(): biome_info.text = _biome_text(nm, info))
+	var back := Button.new()
+	back.text = "Back to maps"
+	back.custom_minimum_size = Vector2(220, 44)
+	back.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	back.add_theme_font_size_override("font_size", 19)
+	back.pressed.connect(back_to_maps)
+	box.add_child(back)
 	menu_vbox.add_child(box)
-	menu_vbox.move_child(box, menu_tools_row.get_index())
+	menu_vbox.move_child(box, map_list.get_index() + 1)
 	_layout()
 
 func _biome_text(nm: String, info: String) -> String:
 	var t := info
-	if nm == "Stadium":
-		t += "   (race tracks only: Endless Road stays in the forest)"
 	return t
+
+# start screen step 2: after picking a map, choose its biome
+var map_list: VBoxContainer
+var biome_box: VBoxContainer
+var picked_map := -1
+var picked_name := ""
+
+func _show_biome_step(idx: int, name: String) -> void:
+	if Net.is_client():   # online: the host picks the map, you follow it
+		menu_status.text = "ONLINE  -  THE HOST PICKS THE MAP"
+		return
+	if menu_busy or biome_box == null:
+		_pick(idx, name)
+		return
+	picked_map = idx
+	picked_name = name
+	map_list.visible = false
+	biome_box.visible = true
+	menu_status.text = "BIOME  -  %s" % name.to_upper()
+	_layout()
+
+func in_biome_step() -> bool:
+	return biome_box != null and biome_box.visible
+
+func back_to_maps() -> void:
+	if biome_box == null or menu_busy:
+		return
+	biome_box.visible = false
+	map_list.visible = true
+	menu_status.text = "MAP"
+	_layout()
 
 func _pick(idx: int, name: String) -> void:
 	if menu_busy:
@@ -1046,6 +1471,9 @@ func _pick(idx: int, name: String) -> void:
 # Enter / Start on the menu: drive the highlighted (last played) map
 func start() -> void:
 	if menu == null or not menu.visible:
+		return
+	if in_biome_step():   # Enter on the biome step: drive the picked map in the current biome
+		_pick(picked_map, picked_name)
 		return
 	for e in menu_entries:
 		if e["index"] == menu_current:
@@ -1269,7 +1697,7 @@ func _layout() -> void:
 	if controls_panel:
 		controls_panel.reset_size()
 		controls_panel.position = (vs - controls_panel.size) * 0.5
-	for sp in [cache_panel, inventory_panel]:
+	for sp in [cache_panel, inventory_panel, mp_panel]:
 		if sp:
 			sp.reset_size()
 			sp.position = (vs - sp.size) * 0.5
@@ -1324,7 +1752,7 @@ func _process(delta: float) -> void:
 		if _show("fps"):
 			parts.append("FPS %d   |   %.1f ms" % [fps, 1000.0 / max(fps, 1.0)])
 		if _show("ping"):
-			parts.append("Ping: offline (single-player)")
+			parts.append(Net.ping_text())
 		perf_lbl.text = "   |   ".join(parts)
 		perf_lbl.visible = not parts.is_empty()
 		dmg_lbl.position.y = 146.0 if perf_lbl.visible else 120.0

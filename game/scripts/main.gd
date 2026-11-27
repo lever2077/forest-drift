@@ -8,6 +8,8 @@ const CameraRig = preload("res://scripts/camera_rig.gd")
 const Hud = preload("res://scripts/hud.gd")
 const EngineAudio = preload("res://scripts/engine_audio.gd")
 const EnvController = preload("res://scripts/env_controller.gd")
+const Gfx = preload("res://scripts/gfx.gd")
+const BiomeFx = preload("res://scripts/biome_fx.gd")
 const EndlessTrack = preload("res://scripts/endless_track.gd")
 const Mountains = preload("res://scripts/mountains.gd")
 const HillTrack = preload("res://scripts/hill_track.gd")
@@ -29,10 +31,9 @@ static var auto_start := false     # set when the menu reloads the world to driv
 static var biome_name := ""         # cosmetic biome picked on the start menu (saved)
 const Biome = preload("res://scripts/biome.gd")
 
-# the biome a map is actually built in: the stadium only exists on the race tracks
-static func biome_for(map: int, name: String) -> String:
-	if name == "Stadium" and map == 1:
-		return "Forest"
+# the biome a map is actually built in (a saved biome that no longer exists,
+# like the old Stadium, becomes Forest)
+static func biome_for(_map: int, name: String) -> String:
 	return name if name in Biome.LIST else "Forest"
 
 func set_biome(name: String) -> void:
@@ -57,6 +58,8 @@ var envc
 var was_dark := false
 var grass
 var grass_quality := 2      # 0 off, 1 low, 2 high (Settings panel, saved)
+var biome_fx := 1.0         # Settings > Graphics > Biome effects: 0..1 of the normal amount (saved)
+var biome_fx_node
 var car_damage := false     # body panels dent on impacts (Settings panel, saved)
 
 var car_effects := true     # damage can break the engine / wheels / axles (Settings, saved)
@@ -130,18 +133,193 @@ func set_volume(bus: String, v: float) -> void:
 	_apply_volume(bus)
 	save_settings()
 
+func set_biome_fx(v: float) -> void:
+	biome_fx = clampf(v, 0.0, 1.0)
+	if biome_fx_node:
+		biome_fx_node.set_level(biome_fx)
+	save_settings()
+
 func set_grass(q: int) -> void:
 	grass_quality = q
 	if grass:
 		grass.set_quality(q)
 	save_settings()
 
-# Settings > Graphics > Baked lighting: 0 off, 1 low, 2 high (saved).
-# The world is generated when a map loads, so editor lightmaps can't be used;
-# instead Godot's SDFGI bakes the scene into a signed-distance field around the
-# camera and bounces the sun and sky light off the ground, trees and road
-# (green light under the canopy, darker contact areas, light spilling off the
-# road). High also adds screen-space indirect light for the fine detail.
+# Settings > Graphics > Detail (High / Low smooth) and Baked lighting (Off / On),
+# saved. Both change how the world is generated (see gfx.gd), so changing one
+# reloads the map (or the start screen).
+func set_low_detail(on: bool) -> void:
+	if on == Gfx.low:
+		return
+	Gfx.low = on
+	_reload_for_gfx()
+
+func set_baked(on: bool) -> void:
+	if on == Gfx.baked:
+		return
+	Gfx.baked = on
+	_reload_for_gfx()
+
+func _reload_for_gfx() -> void:
+	save_settings()
+	auto_start = started   # driving: come straight back into the same map
+	_safe_reload()
+
+# screen effects / shadows for the two modes (called after _setup_environment)
+func _apply_gfx_env() -> void:
+	if Gfx.low:
+		env.ssao_enabled = false
+		env.volumetric_fog_enabled = false
+		env.glow_enabled = false
+		sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+		sun.directional_shadow_max_distance = 90.0
+		sun.shadow_blur = 2.0
+		get_viewport().msaa_3d = Viewport.MSAA_DISABLED   # FXAA (project setting) still smooths edges
+	if Gfx.baked:
+		# the world's light and shadows are in its colours: no shadow maps, no SSAO
+		sun.shadow_enabled = false
+		env.ssao_enabled = false
+
+# Baked lighting: the world can't show the car's real shadow (it's drawn
+# unshaded), so a soft dark patch is projected under the car instead.
+var car_blob: Decal
+
+func _make_car_blob() -> void:
+	var S := 64
+	var img := Image.create(S, S, false, Image.FORMAT_RGBA8)
+	for y in S:
+		for x in S:
+			var d := Vector2((x + 0.5) / S * 2.0 - 1.0, (y + 0.5) / S * 2.0 - 1.0).length()
+			var a := clampf(1.0 - smoothstep(0.45, 1.0, d), 0.0, 1.0)
+			img.set_pixel(x, y, Color(0, 0, 0, a))
+	car_blob = Decal.new()
+	car_blob.texture_albedo = ImageTexture.create_from_image(img)
+	car_blob.size = Vector3(2.6, 4.0, 5.2)
+	car_blob.modulate = Color(1, 1, 1, 0.75)
+	car_blob.upper_fade = 0.2
+	car_blob.lower_fade = 0.2
+	car_blob.cull_mask = 1   # only the world: the car itself is on render layer 2
+	add_child(car_blob)
+	_update_car_blob()
+
+# ---- Beach: driving into the sea. A splash, the car slows to a stop in the
+# water while the screen slowly goes black, then it's put back on the road.
+var sinking := false
+var fade_rect: ColorRect
+
+func _check_sea(dt: float) -> void:
+	if track == null:
+		return
+	var sy = track.get("sea_y")
+	if sy == null or float(sy) < -1e8:
+		return
+	if sinking:
+		car.vel *= exp(-dt * 2.5)   # dragged to a stop by the water
+		return
+	if car.global_position.y < float(sy) - 0.3:
+		_sink(float(sy))
+
+func _sink(sy: float) -> void:
+	sinking = true
+	print("SEA: splash at %.0f m, resetting" % car.global_position.y)
+	_splash(Vector3(car.global_position.x, sy + 0.05, car.global_position.z))
+	if fade_rect == null:
+		var cl := CanvasLayer.new()
+		cl.layer = 100
+		add_child(cl)
+		fade_rect = ColorRect.new()
+		fade_rect.color = Color(0, 0, 0, 0)
+		fade_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+		fade_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		cl.add_child(fade_rect)
+	var t := create_tween()
+	t.tween_property(fade_rect, "color:a", 1.0, 1.6).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	await t.finished
+	if car and is_instance_valid(car):
+		car.reset_on_track()
+	await get_tree().create_timer(0.35).timeout
+	var t2 := create_tween()
+	t2.tween_property(fade_rect, "color:a", 0.0, 0.7)
+	await t2.finished
+	sinking = false
+
+func _splash(at: Vector3) -> void:
+	var p := GPUParticles3D.new()
+	p.amount = 260
+	p.lifetime = 1.4
+	p.one_shot = true
+	p.explosiveness = 0.92
+	p.local_coords = false
+	p.visibility_aabb = AABB(Vector3(-10, -2, -10), Vector3(20, 14, 20))
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	pm.emission_sphere_radius = 1.2
+	pm.direction = Vector3.UP
+	pm.spread = 40.0
+	pm.initial_velocity_min = 3.0
+	pm.initial_velocity_max = 9.0
+	pm.gravity = Vector3(0, -9.8, 0)
+	pm.scale_min = 0.6
+	pm.scale_max = 1.6
+	var fade := Gradient.new()
+	fade.set_color(0, Color(1, 1, 1, 0.9))
+	fade.set_color(1, Color(1, 1, 1, 0))
+	var ft := GradientTexture1D.new()
+	ft.gradient = fade
+	pm.color_ramp = ft
+	p.process_material = pm
+	var q := QuadMesh.new()
+	q.size = Vector2(0.22, 0.22)
+	var m := StandardMaterial3D.new()
+	m.albedo_texture = envc._soft_dot() if envc else null
+	m.albedo_color = Color(0.85, 0.95, 1.0)
+	m.vertex_color_use_as_albedo = true
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	q.material = m
+	p.draw_pass_1 = q
+	add_child(p)
+	p.global_position = at
+	p.emitting = true
+	get_tree().create_timer(2.5).timeout.connect(p.queue_free)
+	# the sound: a burst of noise that settles into a fizz
+	var rate := 22050
+	var n := int(rate * 1.1)
+	var data := PackedByteArray()
+	data.resize(n * 2)
+	var lp := 0.0
+	for i in n:
+		var tt := float(i) / rate
+		var env := exp(-tt * 3.2) * (1.0 - exp(-tt * 60.0))
+		lp = lerpf(lp, randf_range(-1.0, 1.0), 0.35)
+		data.encode_s16(i * 2, int(clampf(lp * env, -1.0, 1.0) * 30000.0))
+	var w := AudioStreamWAV.new()
+	w.format = AudioStreamWAV.FORMAT_16_BITS
+	w.mix_rate = rate
+	w.data = data
+	var ap := AudioStreamPlayer3D.new()
+	ap.stream = w
+	ap.bus = "Effects" if AudioServer.get_bus_index("Effects") != -1 else "Master"
+	ap.unit_size = 12.0
+	add_child(ap)
+	ap.global_position = at
+	ap.play()
+	ap.finished.connect(ap.queue_free)
+
+func _update_car_blob() -> void:
+	if car_blob == null or car == null or not is_instance_valid(car):
+		return
+	var fwd: Vector3 = car.global_transform.basis.z
+	fwd.y = 0.0
+	if fwd.length() < 0.01:
+		fwd = Vector3.BACK
+	car_blob.global_transform = Transform3D(Basis.looking_at(fwd.normalized(), Vector3.UP), car.global_position)
+
+# Settings > Graphics > Light bounces: 0 off, 1 low, 2 high (saved; was called
+# "Baked lighting" before v1.13). Godot's SDFGI bakes the scene into a
+# signed-distance field around the camera and bounces the sun and sky light off
+# the ground, trees and road. High also adds screen-space indirect light. It
+# costs FPS, and does nothing with baked lighting on (the world is unshaded).
 var gi_quality := 0
 
 func set_gi(q: int) -> void:
@@ -152,7 +330,7 @@ func set_gi(q: int) -> void:
 func _apply_gi() -> void:
 	if env == null:
 		return
-	var q := 0 if vr else gi_quality
+	var q := 0 if (vr or Gfx.baked) else gi_quality
 	env.sdfgi_enabled = q > 0
 	env.ssil_enabled = q == 2
 	if q > 0:
@@ -174,12 +352,16 @@ func _apply_gi() -> void:
 func _mark_gi_dynamic(n: Node) -> void:
 	if n is GeometryInstance3D:
 		n.gi_mode = GeometryInstance3D.GI_MODE_DYNAMIC
+		if Gfx.baked:
+			n.layers = 2   # keeps the car's shadow patch off the car itself
 	for c in n.get_children():
 		_mark_gi_dynamic(c)
 
 func _on_node_added(n: Node) -> void:
 	if n is GeometryInstance3D and car and is_instance_valid(car) and car.is_ancestor_of(n):
 		n.gi_mode = GeometryInstance3D.GI_MODE_DYNAMIC
+		if Gfx.baked:
+			n.layers = 2
 
 func _ready() -> void:
 	var t0 := Time.get_ticks_msec()
@@ -189,6 +371,18 @@ func _ready() -> void:
 	_setup_input()
 	_setup_audio()
 	Profile.load_profile()
+	# dev aids (first launch only): --nethost, --netjoin=<address>, --netname=<name>
+	if not net_dev_done:
+		net_dev_done = true
+		for a in OS.get_cmdline_user_args():
+			if a == "--nethost":
+				Net.host()
+			elif a.begins_with("--netjoin="):
+				Net.join(a.substr(10))
+			elif a == "--fakegomap":   # dev: act as if the host said "map 1, Forest" after 2 s
+				get_tree().create_timer(2.0).timeout.connect(func(): get_tree().current_scene.net_go_map(1, "Forest"))
+			elif a.begins_with("--netname="):
+				Net.my_name = a.substr(10)
 	var xr :=XRServer.find_interface("OpenXR")
 	if xr and xr.is_initialized() and shot_dir == "":
 		vr = true
@@ -196,10 +390,20 @@ func _ready() -> void:
 		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 	if "--vrsim" in OS.get_cmdline_user_args():
 		vr = true   # dev aid: the VR menu / HUD on the desktop window, no headset
-	_setup_environment()
-	# map (picked on the start menu, remembered)
+	# graphics modes that shape how the world is built (gfx.gd)
 	var cfm := ConfigFile.new()
 	var have_cfg := cfm.load(SETTINGS_PATH) == OK
+	Gfx.reset()
+	Gfx.low = bool(cfm.get_value("world", "low_detail", false)) if have_cfg else false
+	Gfx.baked = bool(cfm.get_value("world", "baked", false)) if have_cfg else false
+	for a in OS.get_cmdline_user_args():   # dev aids: --low=0/1 --baked=0/1
+		if a.begins_with("--low="):
+			Gfx.low = a.substr(6) == "1"
+		elif a.begins_with("--baked="):
+			Gfx.baked = a.substr(8) == "1"
+	_setup_environment()
+	_apply_gfx_env()
+	# map (picked on the start menu, remembered)
 	gi_quality = int(cfm.get_value("world", "gi", 0)) if have_cfg else 0
 	for a in OS.get_cmdline_user_args():   # dev aid: --gi=0..2
 		if a.begins_with("--gi="):
@@ -222,6 +426,8 @@ func _ready() -> void:
 	for a in OS.get_cmdline_user_args():   # dev aid: --biome=Savannah (spaces as _)
 		if a.begins_with("--biome="):
 			biome_name = a.substr(8).replace("_", " ")
+	if not biome_name in Biome.LIST:   # e.g. the removed Stadium
+		biome_name = "Forest"
 	var args := OS.get_cmdline_user_args()
 	var test_mode := shot_dir != "" or "--drivetest" in args or "--bottest" in args or "--edgetest" in args or "--vrgrabtest" in args
 	# start screen: a fresh launch (or Esc while driving) shows the blurred forest
@@ -250,12 +456,24 @@ func _ready() -> void:
 	add_child(forest)
 	forest.set_biome(track.biome)
 	forest.build(track, 0.7 if vr else 1.0, not track.endless)
+	if Gfx.baked and track.has_method("bake_shadows"):   # tree shadows into the ground colours
+		var tl := []
+		for k in forest.hash.keys():
+			tl.append_array(forest.hash[k])
+		track.bake_shadows(tl)
 	if track.endless:
 		track.set_forest(forest)
 	grass = Grass.new()
 	grass.name = "Grass"
 	add_child(grass)
 	grass.setup(track, 0.6 if vr else 1.0, grass_quality)
+	biome_fx_node = BiomeFx.new()   # falling leaves / petals / ash (biome)
+	biome_fx_node.name = "BiomeFx"
+	add_child(biome_fx_node)
+	biome_fx_node.setup(track.biome, biome_fx)
+	# online: the host tells everyone which map / biome it's on
+	if Net.is_host():
+		Net.host_started_map(map_choice, biome_name)
 	car = Car.new()
 	car.name = "Car"
 	var car_id := Profile.equipped_car
@@ -266,8 +484,10 @@ func _ready() -> void:
 	add_child(car)
 	car.setup(track, forest, self)
 	car.model.position.z = 0.05   # put the CG between the axles
-	car.model.set_paint(Profile.skin_color(Profile.equipped_skin))   # skin from the Inventory
+	car.model.set_paint(Profile.skin_color(Profile.equipped_skin), Profile.skin_neon(Profile.equipped_skin))   # skin from the Inventory
 	_mark_gi_dynamic(car)
+	if Gfx.baked:
+		_make_car_blob()
 	car.set_mech_effects(car_effects)
 	car.set_mech_options(dmg_engine, dmg_wheels, wheels_fall)
 	if not test_mode:   # dev test runs don't pay into the real profile
@@ -325,6 +545,8 @@ func _ready() -> void:
 		_edge_test()
 	if "--fliptest" in args:
 		_flip_test()
+	if "--groundbench" in args:
+		_ground_bench()
 	if "--menutest" in args:
 		_menu_test_step()
 
@@ -376,6 +598,20 @@ func _crash_test() -> void:
 			fmax = max(fmax, (dm.pos[i] - dm.rest[i]).length())
 	print("CRASH %.0f km/h: frame moved up to %.2f m, dents %d, engine %.2f temp %.2f wheels %s axles %s" % [kmh, fmax, car.model.dents.size(), car.engine_dmg, car.engine_temp, str(car.wheel_dmg), str(car.axle_broken)])
 	print("  parts: " + ", ".join(pm))
+	if car.model.damage and "--verbose" in OS.get_cmdline_user_args():
+		# how far each slice of the crumple frame moved / bent, front to back
+		var dm3 = car.model.damage
+		var sl := []
+		for k in dm3.NZ:
+			var mv := 0.0
+			var pl := 0.0
+			for j in dm3.NY:
+				for i in dm3.NX:
+					var id: int = dm3._idx(i, j, k)
+					mv = max(mv, (dm3.pos[id] - dm3.rest[id]).length())
+					pl = max(pl, dm3.plast[id])
+			sl.append("z%.1f:%.2f/%.3f" % [dm3.rest[dm3._idx(0, 0, k)].z, mv, pl])
+		print("  frame slices (moved m / bend): " + " ".join(sl))
 	if "--repair" in OS.get_cmdline_user_args():
 		car.restart()
 		await get_tree().create_timer(0.5).timeout
@@ -395,6 +631,9 @@ func _crash_test() -> void:
 var menu_cam: Camera3D
 
 func _build_start_screen(args: Array) -> void:
+	for a in args:   # dev aid: --menushot=<png> saves the start screen and quits
+		if String(a).begins_with("--menushot="):
+			_menu_shot.call_deferred(String(a).substr(11))
 	envc = EnvController.new()
 	envc.name = "Environment"
 	add_child(envc)
@@ -504,6 +743,7 @@ func _build_menu_forest() -> void:
 	var gm := StandardMaterial3D.new()
 	gm.albedo_color = Color(0.16, 0.2, 0.08)
 	gm.roughness = 1.0
+	Gfx.surface(gm)
 	ground.material_override = gm
 	add_child(ground)
 	forest = Forest.new()
@@ -544,6 +784,62 @@ func _build_menu_forest() -> void:
 		forest.add_tree_block(cells[k][0], cells[k][1], Vector3((kv.x + 0.5) * 48.0, 0, (kv.y + 0.5) * 48.0), forest)
 
 # Esc while driving: back to the start screen to pick a map
+# ---------------------------------------------------------------- online (net.gd)
+const RemoteCar = preload("res://scripts/remote_car.gd")
+var remote_cars := {}   # peer id -> remote_car.gd
+
+# host -> us: drive this map in this biome (loads it unless we're already there)
+func net_go_map(map_idx: int, biome: String) -> void:
+	if unloading:
+		return
+	var same := started and map_choice == map_idx and biome_for(map_idx, biome_name) == biome_for(map_idx, biome)
+	if same:
+		return
+	map_choice = clampi(map_idx, 0, MAPS.size() - 1)
+	biome_name = biome
+	auto_start = true
+	_safe_reload()
+
+# everyone else's cars on this map: create, move, and remove when they leave
+static var net_dev_done := false
+var net_test_t := 0.0
+
+func _update_remote_cars(dt: float) -> void:
+	if "--nettest" in OS.get_cmdline_user_args() and started:   # dev: report what we see, then quit
+		net_test_t += dt
+		if int(net_test_t * 2.0) != int((net_test_t - dt) * 2.0):
+			var seen := []
+			for id in remote_cars.keys():
+				var rc = remote_cars[id]
+				seen.append("%s at %s (car %s)" % [rc.tag.text, str(rc.global_position.snapped(Vector3.ONE * 0.1)), rc.car_id])
+			print("NETTEST t=%.1f map=%s online=%s ping=%s players=%d remote cars: %s" % [net_test_t, MAPS[map_choice], Net.is_online(), Net.ping_text(), Net.players.size(), ", ".join(seen)])
+		if net_test_t > 12.0:
+			get_tree().quit()
+	if not Net.is_online():
+		for id in remote_cars.keys():
+			remote_cars[id].queue_free()
+		remote_cars.clear()
+		return
+	for id in Net.players.keys():
+		var info: Dictionary = Net.players[id]
+		var here: bool = started and int(info.get("map", -1)) == map_choice and info.has("xf")
+		if here and not remote_cars.has(id):
+			var rc := RemoteCar.new()
+			rc.name = "Player%d" % id
+			add_child(rc)
+			rc.setup(String(info.get("name", "Player")), String(info.get("car", "car_350z")), String(info.get("skin", "skin_stock")))
+			remote_cars[id] = rc
+		if remote_cars.has(id):
+			if here:
+				remote_cars[id].apply(info, dt)
+			else:
+				remote_cars[id].queue_free()
+				remote_cars.erase(id)
+	for id in remote_cars.keys():
+		if not Net.players.has(id):
+			remote_cars[id].queue_free()
+			remote_cars.erase(id)
+
 func _back_to_menu() -> void:
 	auto_start = false
 	save_settings()
@@ -552,6 +848,15 @@ func _back_to_menu() -> void:
 # dev aid: --menutest drives the menu automatically (pick endless with changed
 # settings, come back, pick again...) to catch crashes when switching maps
 static var menu_test_n := 0
+func _menu_shot(path: String) -> void:
+	await get_tree().create_timer(2.0).timeout
+	if "--biomestep" in OS.get_cmdline_user_args() and hud:   # dev: show step 2
+		hud._show_biome_step(1, MAPS[1])
+	await get_tree().create_timer(0.5).timeout
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png(path)
+	get_tree().quit()
+
 func _menu_test_step() -> void:
 	await get_tree().create_timer(2.0).timeout
 	menu_test_n += 1
@@ -746,6 +1051,10 @@ func _bot_test() -> void:
 				track.road_dist(car.global_position.x, car.global_position.z), rad_to_deg(car.pitch), rad_to_deg(car.roll)]))
 	# --fps: short timed run with vsync off, prints the average frame rate
 	var fps_mode := "--fps" in OS.get_cmdline_user_args()
+	var lane := 0.0
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--lane="):
+			lane = float(a.substr(7))
 	var t_end := 25.0 if fps_mode else 120.0
 	var f0 := 0
 	var w0 := 0
@@ -784,6 +1093,9 @@ func _bot_test() -> void:
 		n = track.pts.size()
 		var look := 6 + int(car.speed * 0.5)
 		var tgt: Vector3 = track.pts[(car.track_idx + look) % n]
+		if lane != 0.0:   # --lane=N: drive N metres beside the road (off-road perf)
+			var tt: Vector3 = track.tans[(car.track_idx + look) % n]
+			tgt += Vector3(-tt.z, 0, tt.x) * lane
 		var p: Vector3 = car.global_position
 		var want := Vector2(tgt.x - p.x, tgt.z - p.z).normalized()
 		var hv := Vector2(car.vel.x, car.vel.z)
@@ -804,7 +1116,7 @@ func _bot_test() -> void:
 			stuck += dt
 		else:
 			stuck = 0.0
-		if stuck > 3.0:
+		if stuck > 3.0 and lane == 0.0:
 			car.reset_on_track()
 			resets += 1
 			stuck = 0.0
@@ -907,6 +1219,27 @@ func _restart() -> void:
 	car.restart()
 
 # scripted inputs + telemetry, used to tune the physics
+# dev aid: --groundbench times the ground queries the car makes every tick,
+# on the road and beside it (off-road was what made the frame rate collapse)
+func _ground_bench() -> void:
+	var i: int = car.track_idx
+	var p: Vector3 = track.pts[i]
+	var t: Vector3 = track.tans[i]
+	var l := Vector3(-t.z, 0, t.x)
+	for off in [0.0, 8.0, 20.0, 60.0]:
+		var q: Vector3 = p + l * off
+		for fn in ["road_dist", "ground_h", "surface_h", "terrain_h"]:
+			var t0 := Time.get_ticks_usec()
+			for k in 200:
+				track.call(fn, q.x + k * 0.01, q.z)
+			print("  %5.0f m  %-10s %6.1f us/call" % [off, fn, (Time.get_ticks_usec() - t0) / 200.0])
+		var tt := Time.get_ticks_usec()
+		var nt := 0
+		for k in 200:
+			nt += forest.trees_near(q.x, q.z).size()
+		print("  %5.0f m  trees_near %6.1f us/call (%d trees)" % [off, (Time.get_ticks_usec() - tt) / 200.0, nt / 200])
+	get_tree().quit()
+
 func _drive_test() -> void:
 	set_process(false)
 	var phases := [
@@ -1012,6 +1345,10 @@ func _setup_environment() -> void:
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	sun.directional_shadow_max_distance = 160.0 if not vr else 90.0
 	sun.shadow_blur = 1.2
+	# blend between the shadow cascades instead of a hard switch: with a low sun
+	# the coarser far cascade shades the ground differently, which showed as a
+	# sharp line across the road ~30 m ahead
+	sun.directional_shadow_blend_splits = true
 	sun.light_volumetric_fog_energy = 1.4
 	add_child(sun)
 
@@ -1067,6 +1404,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	if hud and hud.menu_open():
 		if event.is_action_pressed("start"):
 			hud.start()
+		elif event.is_action_pressed("menu") and hud.in_biome_step():
+			hud.back_to_maps()   # Esc on the biome step: back to the maps
 		return
 	if car == null:
 		if hud and event.is_action_pressed("menu"):
@@ -1108,6 +1447,7 @@ func _load_settings() -> void:
 		envc.cycle_weather = cf.get_value("world", "cycle_weather", false)
 		envc.weather_minutes = cf.get_value("world", "weather_minutes", 3.0)
 		grass_quality = int(cf.get_value("world", "grass", 2))
+		biome_fx = clampf(float(cf.get_value("world", "biome_fx", 1.0)), 0.0, 1.0)
 		car_damage = bool(cf.get_value("world", "car_damage", false))
 		car_effects = bool(cf.get_value("world", "car_effects", true))
 		dmg_engine = bool(cf.get_value("world", "dmg_engine", true))
@@ -1136,7 +1476,10 @@ func save_settings() -> void:
 	cf.set_value("world", "map", map_choice)
 	cf.set_value("world", "biome", biome_name)
 	cf.set_value("world", "grass", grass_quality)
+	cf.set_value("world", "biome_fx", biome_fx)
 	cf.set_value("world", "gi", gi_quality)
+	cf.set_value("world", "low_detail", Gfx.low)
+	cf.set_value("world", "baked", Gfx.baked)
 	cf.set_value("world", "car_damage", car_damage)
 	cf.set_value("world", "car_effects", car_effects)
 	cf.set_value("world", "dmg_engine", dmg_engine)
@@ -1170,6 +1513,13 @@ func _pick_map(i: int) -> void:
 # piece by piece, then load the next scene.
 var unloading := false
 
+# waits for the renderer to finish a frame (no window: just the next frame)
+func _post_draw() -> void:
+	if DisplayServer.get_name() == "headless":
+		await get_tree().process_frame
+	else:
+		await RenderingServer.frame_post_draw
+
 func _safe_reload() -> void:
 	if unloading:
 		return                       # Esc pressed twice: one reload is enough
@@ -1194,7 +1544,7 @@ func _safe_reload() -> void:
 		if th and th.is_started():
 			th.wait_to_finish()
 	await get_tree().process_frame
-	await RenderingServer.frame_post_draw
+	await _post_draw()
 	# free the world (everything except the loading text), then wait again
 	for c in get_children():
 		if c != hud:
@@ -1204,7 +1554,7 @@ func _safe_reload() -> void:
 	grass = null
 	track = null
 	await get_tree().process_frame
-	await RenderingServer.frame_post_draw
+	await _post_draw()
 	await get_tree().process_frame
 	get_tree().reload_current_scene()
 
@@ -1216,6 +1566,8 @@ func _all_nodes(root: Node) -> Array:
 	return out
 
 func _physics_process(_delta: float) -> void:
+	if car and started and shot_dir == "":
+		_check_sea(_delta)   # beach: driving into the sea
 	if track and track.endless and car:
 		var ts := Time.get_ticks_usec()
 		track.update_stream(car.track_idx)
@@ -1230,6 +1582,8 @@ func _process(_delta: float) -> void:
 	if menu_cam:
 		menu_cam.rotation.y += _delta * 0.05
 		return
+	_update_car_blob()
+	_update_remote_cars(_delta)
 	# headlights come on automatically when it gets dark
 	if envc and car and envc.dark != was_dark:
 		was_dark = envc.dark
@@ -1239,7 +1593,9 @@ func _process(_delta: float) -> void:
 			track.set_night(was_dark)
 	if car == null or shot_dir != "":
 		return
-	if not started:
+	# not driving yet, typing in Settings > Codes (the letters must not drive the
+	# car), or sinking in the sea (no control while the screen fades out)
+	if not started or sinking or (hud and hud.code_edit and hud.code_edit.has_focus()):
 		car.in_throttle = 0.0
 		car.in_brake = 0.0
 		car.in_steer = 0.0

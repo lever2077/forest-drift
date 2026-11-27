@@ -9,6 +9,7 @@
 # Quality: 0 = off, 1 = low, 2 = high (set from the Settings panel).
 extends Node3D
 
+const Gfx = preload("res://scripts/gfx.gd")
 const CHUNK := 12.0
 const PER_M2 := 2.0            # tufts per square metre on High, before the map's multiplier
 const BUILD_BUDGET_US := 1500  # time spent building chunks per frame
@@ -30,13 +31,20 @@ var lod_timer := 0.0
 
 const SHADER := """
 shader_type spatial;
+#ifdef BAKED
+render_mode cull_disabled, unshaded, shadows_disabled;
+global uniform vec3 baked_tint;
+#else
 render_mode cull_disabled, specular_schlick_ggx, shadows_disabled;
+#endif
 uniform sampler2D blades : source_color, filter_linear_mipmap, repeat_disable;
 uniform float fade_far = 50.0;
 uniform float snow = 0.0;
 uniform vec3 base_col : source_color = vec3(0.04, 0.06, 0.02);
 uniform vec3 tip_a : source_color = vec3(0.12, 0.18, 0.06);
 uniform vec3 tip_b : source_color = vec3(0.21, 0.22, 0.09);
+uniform float flowers = 0.0;   // lavender: flower spikes on the tufts
+uniform vec3 flower_col : source_color = vec3(0.62, 0.42, 0.95);
 varying float tip;
 varying float hue;
 void vertex() {
@@ -54,7 +62,15 @@ void fragment() {
 	vec3 base = base_col;
 	vec3 top = mix(tip_a, tip_b, hue);
 	vec3 c = mix(base, top, smoothstep(0.0, 0.9, tip));
+	if (flowers > 0.0) {
+		float spike = smoothstep(0.42, 0.68, tip);
+		float buds = 0.72 + 0.28 * sin(UV.y * 70.0 + hue * 6.0);
+		c = mix(c, flower_col * (0.75 + 0.5 * hue) * buds, spike * flowers);
+	}
 	ALBEDO = mix(c, vec3(0.86, 0.88, 0.92), snow * smoothstep(0.2, 1.0, tip) * 0.85);
+#ifdef BAKED
+	ALBEDO *= baked_tint * (0.55 + 0.55 * tip);   // baked: darker down among the blades
+#endif
 	ALPHA = a;
 	ALPHA_SCISSOR_THRESHOLD = 0.5;
 	ROUGHNESS = 0.85;
@@ -76,7 +92,7 @@ func setup(p_track, vr_scale := 1.0, p_quality := 2) -> void:
 	fast_queries = track.get("t_h") != null
 	mesh = _tuft_mesh()
 	var sh := Shader.new()
-	sh.code = SHADER
+	sh.code = Gfx.shader_code(SHADER)
 	mat = ShaderMaterial.new()
 	mat.shader = sh
 	mat.set_shader_parameter("blades", _blade_texture())
@@ -84,6 +100,9 @@ func setup(p_track, vr_scale := 1.0, p_quality := 2) -> void:
 		for k in [["base_col", "grass_base"], ["tip_a", "grass_tip_a"], ["tip_b", "grass_tip_b"]]:
 			var c: Color = b.get(k[1], Color.WHITE)
 			mat.set_shader_parameter(k[0], Vector3(c.r, c.g, c.b))
+		mat.set_shader_parameter("flowers", float(b.get("flowers", 0.0)))
+		var fc: Color = b.get("flower_col", Color(0.62, 0.42, 0.95))
+		mat.set_shader_parameter("flower_col", Vector3(fc.r, fc.g, fc.b))
 	mesh.surface_set_material(0, mat)
 	if "grass_mat" in track:
 		track.grass_mat = mat
@@ -204,6 +223,8 @@ func _build_chunk(k: Vector2i) -> void:
 	var x0 := k.x * CHUNK
 	var z0 := k.y * CHUNK
 	var clear_d: float = track.HALF_W + 1.9     # past the 1.4 m gravel shoulder
+	var sv = track.get("sea_y")   # beach: no grass under (or right at) the water
+	var sea_lvl: float = float(sv) + 0.6 if sv != null else -1e9
 	# maps with slow queries: sample height + road distance on a small grid
 	var gh := PackedFloat32Array()
 	var gd := PackedFloat32Array()
@@ -244,6 +265,8 @@ func _build_chunk(k: Vector2i) -> void:
 			if d < clear_d:
 				continue
 			h = _bilerp(gh, gn, lx / CELL, lz / CELL)
+		if h < sea_lvl:
+			continue
 		var s := rng.randf_range(0.75, 1.3)
 		var hs := s * height * rng.randf_range(0.75, 1.25) * (0.6 if d < clear_d + 1.5 else 1.0)
 		var b := Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(s, hs, s))

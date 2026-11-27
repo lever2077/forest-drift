@@ -3,6 +3,7 @@
 extends Node3D
 
 const MB = preload("res://scripts/mb.gd")
+const Gfx = preload("res://scripts/gfx.gd")
 
 const CHUNK := 48.0
 const HI_RANGE := 140.0
@@ -27,12 +28,30 @@ var tree_k := 1.0
 var bush_k := 1.0
 var tree_scale := Vector3.ONE
 var leaf_tint := Color.WHITE
+var leaf_color := Color(0, 0, 0, 0)   # a > 0: leaves repainted in this colour
+var leaf_glow := 0.0                  # leaves glow in glow_col (neon biome)
+var glow_col := Color.BLACK
+var glow_col2 := Color.BLACK
+var buildings := false                # neon night: buildings with neon edges instead of trees
+var no_leaves := false                # volcanic: bare charred trees
+var bark_col := Color(0, 0, 0, 0)     # a > 0: bark in this colour (charred black)
+var tree_clear := 0.0                 # extra space kept free beside the road (buildings)
+var bld_mat: StandardMaterial3D
+var neon_mats: Array = []
 
 func set_biome(b: Dictionary) -> void:
 	tree_k = b.get("tree_k", 1.0)
 	bush_k = b.get("bush_k", 1.0)
 	tree_scale = b.get("tree_scale", Vector3.ONE)
 	leaf_tint = b.get("leaf_tint", Color.WHITE)
+	leaf_color = b.get("leaf_color", Color(0, 0, 0, 0))
+	leaf_glow = float(b.get("leaf_glow", 0.0))
+	glow_col = b.get("glow_col", Color.BLACK)
+	glow_col2 = b.get("glow_col2", glow_col)
+	buildings = bool(b.get("buildings", false))
+	no_leaves = bool(b.get("no_leaves", false))
+	bark_col = b.get("bark_col", Color(0, 0, 0, 0))
+	tree_clear = float(b.get("tree_clear", 0.0))
 
 func build(p_track, p_quality := 1.0, scatter := true) -> void:
 	track = p_track
@@ -49,15 +68,33 @@ func build(p_track, p_quality := 1.0, scatter := true) -> void:
 			hash[hk].append(ov)
 	_make_materials()
 	leaf_mat.albedo_color = leaf_mat.albedo_color * leaf_tint
+	if leaf_glow > 0.0:   # neon leaves
+		leaf_mat.emission_enabled = true
+		leaf_mat.emission = glow_col
+		leaf_mat.emission_energy_multiplier = leaf_glow
+	Gfx.surface(leaf_mat)
+	Gfx.surface(bark_mat)
+	if buildings:
+		_make_building_mats()
 	for v in VARIANTS:
 		var rng := RandomNumberGenerator.new()
 		rng.seed = 1000 + v * 77
+		if buildings:   # neon night: a building instead of each tree variant
+			var bres: Array = _building(rng, true)
+			hi_meshes.append(bres[0])
+			lo_meshes.append(_building(rng, false, bres[2])[0])
+			trunk_radius.append(bres[1])
+			continue
 		var data := _gen_skeleton(rng)
-		hi_meshes.append(_mesh_from_skeleton(data, rng, true))
-		rng.seed = 5000 + v
-		lo_meshes.append(_mesh_from_skeleton(data, rng, false))
+		if Gfx.low and not no_leaves:   # low detail: round ball crowns (bare charred trees keep their branches)
+			hi_meshes.append(_ball_tree(data, rng, true))
+			lo_meshes.append(_ball_tree(data, rng, false))
+		else:
+			hi_meshes.append(_mesh_from_skeleton(data, rng, true))
+			rng.seed = 5000 + v
+			lo_meshes.append(_mesh_from_skeleton(data, rng, false))
 		trunk_radius.append(data["trunk_r"])
-	bush_mesh = _make_bush()
+	bush_mesh = _make_ball_bush() if Gfx.low else _make_bush()
 	if scatter:
 		_scatter()
 
@@ -99,6 +136,16 @@ func _make_leaf_texture() -> ImageTexture:
 		# terminal leaflet
 		var tip := start + dir * (length + 22)
 		_leaflet(data, S, tip, 26, 11, ang, base_col.lightened(0.08))
+	# biome leaf colour (autumn orange, blossom pink, ...): repaint the green
+	# leaves in it, keeping each pixel's light and shade
+	if leaf_color.a > 0.0:
+		var ref := 0.3 * 0.31 + 0.59 * 0.52 + 0.11 * 0.14
+		for i in S * S:
+			var o := i * 4
+			var k := (0.3 * data[o] + 0.59 * data[o + 1] + 0.11 * data[o + 2]) / 255.0 / ref
+			data[o] = int(clampf(leaf_color.r * k, 0.0, 1.0) * 255.0)
+			data[o + 1] = int(clampf(leaf_color.g * k, 0.0, 1.0) * 255.0)
+			data[o + 2] = int(clampf(leaf_color.b * k, 0.0, 1.0) * 255.0)
 	var img := Image.create_from_data(S, S, false, Image.FORMAT_RGBA8, data)
 	img.generate_mipmaps()
 	return ImageTexture.create_from_image(img)
@@ -133,6 +180,19 @@ func _leaflet(data: PackedByteArray, S: int, c: Vector2, a: float, b: float, ang
 				_plot(data, S, x, y, Color(col.r * shade, col.g * shade, col.b * shade), 1.0)
 
 func _make_materials() -> void:
+	if Gfx.low:
+		# low detail: smooth solid colours, no leaf cut-outs (opaque is much cheaper)
+		leaf_mat = StandardMaterial3D.new()
+		leaf_mat.albedo_color = Color(leaf_color.r * 0.8, leaf_color.g * 0.8, leaf_color.b * 0.8) if leaf_color.a > 0.0 else Color(0.25, 0.42, 0.12)
+		leaf_mat.vertex_color_use_as_albedo = true
+		leaf_mat.roughness = 1.0
+		leaf_mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+		bark_mat = StandardMaterial3D.new()
+		bark_mat.albedo_color = Color(0.3, 0.27, 0.24) if bark_col.a <= 0.0 else bark_col
+		bark_mat.vertex_color_use_as_albedo = true
+		bark_mat.roughness = 1.0
+		bark_mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+		return
 	leaf_mat = StandardMaterial3D.new()
 	leaf_mat.albedo_texture = _make_leaf_texture()
 	leaf_mat.vertex_color_use_as_albedo = true
@@ -156,8 +216,8 @@ func _make_materials() -> void:
 	nt.width = 256
 	nt.height = 256
 	var g := Gradient.new()
-	g.set_color(0, Color(0.16, 0.14, 0.12))
-	g.set_color(1, Color(0.42, 0.39, 0.35))
+	g.set_color(0, Color(0.16, 0.14, 0.12) if bark_col.a <= 0.0 else bark_col.darkened(0.5))
+	g.set_color(1, Color(0.42, 0.39, 0.35) if bark_col.a <= 0.0 else bark_col.lightened(0.25))
 	nt.color_ramp = g
 	bark_mat.albedo_texture = nt
 	var nn := NoiseTexture2D.new()
@@ -169,6 +229,7 @@ func _make_materials() -> void:
 	bark_mat.normal_texture = nn
 	bark_mat.uv1_scale = Vector3(1.0, 3.0, 1.0)
 	bark_mat.roughness = 0.95
+	bark_mat.vertex_color_use_as_albedo = Gfx.baked   # baked: trunks darker near the ground
 
 # ---------------------------------------------------------------- skeleton
 func _gen_skeleton(rng: RandomNumberGenerator) -> Dictionary:
@@ -263,7 +324,7 @@ func _mesh_from_skeleton(data: Dictionary, rng: RandomNumberGenerator, hi: bool)
 		var side: Vector3 = up.cross(Vector3.FORWARD if abs(up.z) < 0.9 else Vector3.RIGHT).normalized()
 		basis = Basis(side, up, side.cross(up)).orthonormalized()
 		var tr := Transform3D(basis, (p0 + p1) * 0.5)
-		mb.cylinder("bark", tr, r0, r1, h, sides, false)
+		mb.cylinder("bark", tr, r0, r1, h, sides, false, _bark_col((p0.y + p1.y) * 0.5))
 	# crown centre / size for shading
 	var cen := Vector3.ZERO
 	for sp in spots:
@@ -280,7 +341,7 @@ func _mesh_from_skeleton(data: Dictionary, rng: RandomNumberGenerator, hi: bool)
 	cen.y = (ymin + ymax) * 0.5
 	var stretch: Vector3 = Vector3(1.0 / rad, 2.0 / max(ymax - ymin, 0.1), 1.0 / rad)
 	# leaf cards
-	var per_spot := 4 if hi else 1
+	var per_spot := 0 if no_leaves else (4 if hi else 1)   # charred trees: bare branches
 	var stride := 1 if hi else 3
 	var idx := 0
 	for sp in spots:
@@ -315,9 +376,187 @@ func _mesh_from_skeleton(data: Dictionary, rng: RandomNumberGenerator, hi: bool)
 			var col := Color(clampf((0.95 + hue * 1.5) * bright, 0, 1.4), clampf(1.0 * bright, 0, 1.4), clampf((0.85 - hue) * bright, 0, 1.4))
 			# spherical normals make the crown shade like one soft volume
 			var n := (out_n * 0.8 + fn * 0.2).normalized()
+			if Gfx.baked:   # bake the sun side of the crown into the leaf colour
+				col = col * (Gfx.light_at(n, 0.9) * 1.1)
+				col.a = 1.0
 			mb.tri("leaf", a, b, cc, n, n, n, col, col, col, Vector2(0, 1), Vector2(1, 1), Vector2(1, 0))
 			mb.tri("leaf", a, cc, d, n, n, n, col, col, col, Vector2(0, 1), Vector2(1, 0), Vector2(0, 0))
 	return mb.build({"bark": bark_mat, "leaf": leaf_mat})
+
+# trunk shade: with baked lighting, darker near the ground (light blocked by the
+# crown and the undergrowth), otherwise plain white (no effect)
+func _bark_col(y: float) -> Color:
+	if not Gfx.baked:
+		return Color.WHITE
+	var k := lerpf(0.35, 0.8, clampf(y / 4.0, 0.0, 1.0))
+	return Color(k, k, k)
+
+# ---------------------------------------------------------------- low detail (ball trees)
+# A smooth ball of leaves. Vertex colours carry a soft shade: with baked lighting
+# the full sun + sky light, otherwise just a little darkening underneath.
+func _ball(mb, centre: Vector3, r: Vector3, seg_u: int, seg_v: int, base: Color, ao: float) -> void:
+	var pts := []
+	for j in seg_v + 1:
+		var b := lerpf(-PI / 2, PI / 2, float(j) / seg_v)
+		var row := []
+		for i in seg_u + 1:
+			var a := TAU * i / seg_u
+			row.append(Vector3(cos(a) * cos(b), sin(b), sin(a) * cos(b)))
+		pts.append(row)
+	for j in seg_v:
+		for i in seg_u:
+			var q := [pts[j][i], pts[j][i + 1], pts[j + 1][i + 1], pts[j + 1][i]]
+			var vs := []
+			var ns := []
+			var cs := []
+			for u in q:
+				var uv: Vector3 = u
+				vs.append(centre + uv * r)
+				var n := Vector3(uv.x / r.x, uv.y / r.y, uv.z / r.z).normalized()
+				ns.append(n)
+				var shade: float
+				if Gfx.baked:
+					shade = Gfx.light_at(n, ao) * 1.15
+				else:
+					shade = lerpf(0.72, 1.0, 0.5 + 0.5 * n.y) * lerpf(1.0, ao, 0.6)
+				var c := base * shade
+				c.a = 1.0
+				cs.append(c)
+			mb.tri("leaf", vs[0], vs[1], vs[2], ns[0], ns[1], ns[2], cs[0], cs[1], cs[2])
+			mb.tri("leaf", vs[0], vs[2], vs[3], ns[0], ns[2], ns[3], cs[0], cs[2], cs[3])
+
+# Low detail tree: the trunk and a short leader into the crown, then one big
+# leaf ball with a few smaller ones around it, sized to the full tree's crown.
+func _ball_tree(data: Dictionary, rng: RandomNumberGenerator, hi: bool) -> ArrayMesh:
+	var mb := MB.new()
+	var segs: Array = data["segs"]
+	var spots: Array = data["spots"]
+	var sides := 7 if hi else 5
+	var top := Vector3.ZERO
+	var top_r := 0.1
+	for i in 3:   # the first three segments are the trunk
+		var s: Array = segs[i]
+		_bark_seg(mb, s[0], s[1], s[2], s[3], sides)
+		top = s[1]
+		top_r = s[3]
+	# crown extent from the leaf spots of the full tree
+	var cen := Vector3.ZERO
+	for sp in spots:
+		cen += sp[0]
+	cen /= max(spots.size(), 1)
+	var rad := 0.5
+	var ymin := 1e9
+	var ymax := -1e9
+	for sp in spots:
+		var q: Vector3 = sp[0]
+		rad = max(rad, Vector2(q.x - cen.x, q.z - cen.z).length())
+		ymin = min(ymin, q.y)
+		ymax = max(ymax, q.y)
+	cen.y = (ymin + ymax) * 0.5 + 0.3
+	var half_h: float = max(ymax - ymin, 1.0) * 0.5
+	_bark_seg(mb, top, cen, top_r, top_r * 0.5, sides)
+	var su := 14 if hi else 8
+	var sv := 9 if hi else 5
+	var green := Color(1.0 + rng.randf_range(-0.08, 0.08), 1.0, 1.0 + rng.randf_range(-0.1, 0.1))
+	# main ball
+	_ball(mb, cen, Vector3(rad * 0.78, half_h * 0.95, rad * 0.78), su, sv, green, 0.95)
+	# smaller balls bulging out of it: lumpy, more tree-like silhouette
+	var n := rng.randi_range(4, 6)
+	var phase := rng.randf() * TAU
+	for k in n:
+		var az := phase + TAU * k / n + rng.randf_range(-0.3, 0.3)
+		var up := rng.randf_range(-0.45, 0.55)
+		var d := Vector3(cos(az) * (1.0 - abs(up) * 0.5), up, sin(az) * (1.0 - abs(up) * 0.5))
+		var p := cen + Vector3(d.x * rad * 0.62, d.y * half_h * 0.7, d.z * rad * 0.62)
+		var br := rad * rng.randf_range(0.42, 0.55)
+		var tint := green.lightened(rng.randf_range(-0.08, 0.12))
+		_ball(mb, p, Vector3(br, br * 0.85, br), max(su - 4, 6), max(sv - 2, 4), tint, lerpf(0.75, 1.0, 0.5 + 0.5 * up))
+	return mb.build({"bark": bark_mat, "leaf": leaf_mat})
+
+# ---------------------------------------------------------------- neon night buildings
+func _make_building_mats() -> void:
+	bld_mat = StandardMaterial3D.new()
+	bld_mat.albedo_color = Color(0.035, 0.035, 0.05)
+	bld_mat.roughness = 0.55
+	bld_mat.metallic = 0.3
+	Gfx.surface(bld_mat)
+	neon_mats = []
+	for c in [glow_col, glow_col2, Color(1.0, 0.82, 0.55)]:
+		var m := StandardMaterial3D.new()
+		var cc: Color = c
+		m.albedo_color = Color(cc.r, cc.g, cc.b).clamp() * 0.3
+		m.emission_enabled = true
+		m.emission = cc
+		m.emission_energy_multiplier = 2.2
+		neon_mats.append(m)
+	neon_mats[2].emission_energy_multiplier = 0.9   # windows: a softer warm light
+
+# A tower block: dark walls, neon tubes along every vertical and top edge, a
+# band of the second neon colour round one floor and some lit windows.
+# Returns [mesh, collision radius, [w, d, h]] (pass the size back in for the
+# far-away version, which skips the windows).
+func _building(rng: RandomNumberGenerator, hi: bool, dims := []) -> Array:
+	var w: float = dims[0] if dims.size() > 0 else rng.randf_range(6.0, 10.0)
+	var d: float = dims[1] if dims.size() > 1 else rng.randf_range(6.0, 10.0)
+	var h: float = dims[2] if dims.size() > 2 else rng.randf_range(9.0, 26.0)
+	var mb := MB.new()
+	# walls (reaching 3 m below the base so slopes don't show a gap)
+	mb.box("bld", Transform3D(Basis(), Vector3(0, h * 0.5 - 1.5, 0)), Vector3(w, h + 3.0, d))
+	var e := 0.16
+	var hw := w * 0.5 + 0.03
+	var hd := d * 0.5 + 0.03
+	for sx in [-1.0, 1.0]:
+		for sz in [-1.0, 1.0]:
+			mb.box("neon", Transform3D(Basis(), Vector3(hw * sx, h * 0.5 - 0.25, hd * sz)), Vector3(e, h + 0.5, e))
+	for sz in [-1.0, 1.0]:
+		mb.box("neon", Transform3D(Basis(), Vector3(0, h, hd * sz)), Vector3(w + e, e, e))
+	for sx in [-1.0, 1.0]:
+		mb.box("neon", Transform3D(Basis(), Vector3(hw * sx, h, 0)), Vector3(e, e, d + e))
+	# a band of the second colour round one floor
+	var by: float = 3.2 * rng.randi_range(1, max(int(h / 3.2) - 1, 1))
+	for sz in [-1.0, 1.0]:
+		mb.box("neon2", Transform3D(Basis(), Vector3(0, by, hd * sz)), Vector3(w, e * 0.8, e * 0.8))
+	for sx in [-1.0, 1.0]:
+		mb.box("neon2", Transform3D(Basis(), Vector3(hw * sx, by, 0)), Vector3(e * 0.8, e * 0.8, d))
+	# lit windows
+	if hi:
+		var floors := int(h / 3.2)
+		for f in floors:
+			var y := 1.6 + f * 3.2
+			for face in 4:
+				var along := w if face < 2 else d
+				var n := int(along / 2.4)
+				for k in n:
+					if rng.randf() > 0.32:
+						continue
+					var u := -along * 0.5 + (k + 0.5) * along / n
+					var sgn := 1.0 if face % 2 == 0 else -1.0
+					var c: Vector3
+					var sz2: Vector3
+					if face < 2:
+						c = Vector3(u, y, (d * 0.5 + 0.02) * sgn)
+						sz2 = Vector3(1.2, 1.1, 0.02)
+					else:
+						c = Vector3((w * 0.5 + 0.02) * sgn, y, u)
+						sz2 = Vector3(0.02, 1.1, 1.2)
+					mb.box("win", Transform3D(Basis(), c), sz2)
+	var mesh: ArrayMesh = mb.build({"bld": bld_mat, "neon": neon_mats[0], "neon2": neon_mats[1], "win": neon_mats[2]})
+	return [mesh, max(w, d) * 0.62, [w, d, h]]
+
+func _bark_seg(mb, p0: Vector3, p1: Vector3, r0: float, r1: float, sides: int) -> void:
+	var h := p0.distance_to(p1)
+	if h < 0.01:
+		return
+	var up := (p1 - p0).normalized()
+	var side: Vector3 = up.cross(Vector3.FORWARD if abs(up.z) < 0.9 else Vector3.RIGHT).normalized()
+	var basis := Basis(side, up, side.cross(up)).orthonormalized()
+	mb.cylinder("bark", Transform3D(basis, (p0 + p1) * 0.5), r0, r1, h, sides, false, _bark_col((p0.y + p1.y) * 0.5))
+
+func _make_ball_bush() -> ArrayMesh:
+	var mb := MB.new()
+	_ball(mb, Vector3(0, 0.45, 0), Vector3(0.85, 0.6, 0.85), 10, 6, Color(0.95, 1.0, 0.9), 0.85)
+	_ball(mb, Vector3(0.45, 0.35, 0.2), Vector3(0.5, 0.42, 0.5), 8, 5, Color(1.0, 1.05, 0.9), 0.8)
+	return mb.build({"leaf": leaf_mat})
 
 func _make_bush() -> ArrayMesh:
 	var mb := MB.new()
@@ -333,6 +572,9 @@ func _make_bush() -> ArrayMesh:
 		var bright := 0.5 + 0.5 * dir.y
 		var col := Color(bright * 0.9, bright, bright * 0.8)
 		var n := dir
+		if Gfx.baked:
+			col = col * (Gfx.light_at(n) * 1.2)
+			col.a = 1.0
 		mb.tri("leaf", cpos - u * hs - v * hs, cpos + u * hs - v * hs, cpos + u * hs + v * hs, n, n, n, col, col, col, Vector2(0, 1), Vector2(1, 1), Vector2(1, 0))
 		mb.tri("leaf", cpos - u * hs - v * hs, cpos + u * hs + v * hs, cpos - u * hs + v * hs, n, n, n, col, col, col, Vector2(0, 1), Vector2(1, 0), Vector2(0, 0))
 	return mb.build({"leaf": leaf_mat})
@@ -353,13 +595,15 @@ func _scatter() -> void:
 			var pz := z + rng.randf_range(-0.45, 0.45) * spacing
 			var d: float = track.road_dist(px, pz)
 			var keep := true
-			if d < track.HALF_W + 3.5:
+			if d < track.HALF_W + 3.5 + tree_clear:
 				keep = false
-			elif d > 70.0:
+			elif d > 70.0 and not buildings:
 				keep = rng.randf() < 0.55   # thinner deep forest
 			# maps can thin the trees out (open hillsides with clumps)
 			if keep and track.has_method("tree_density"):
 				keep = rng.randf() < track.tree_density(px, pz, d)
+			if keep and track.get("sea") == true and track.surface_h(px, pz) < track.sea_y + 0.6:
+				keep = false   # beach: no trees in the sea
 			if keep and tree_k < 1.0:
 				keep = rng.randf() < tree_k
 			if keep:

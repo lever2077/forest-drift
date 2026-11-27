@@ -32,7 +32,7 @@ var mats := {}
 const T_KEYS := [[-2.17, 0.90], [-2.08, 0.955], [-1.9, 0.978], [-1.75, 0.982], [-1.4, 0.985], [-1.0, 0.99], [-0.3, 0.99],
 	[0.3, 0.96], [0.62, 0.86], [1.0, 0.815], [1.5, 0.765], [1.85, 0.70], [2.05, 0.62], [2.17, 0.55]]
 const ROOF_KEYS := [[-1.64, 0.975], [-1.5, 1.015], [-1.3, 1.10], [-1.0, 1.215], [-0.75, 1.29], [-0.5, 1.31],
-	[-0.3, 1.305], [-0.15, 1.27], [0.1, 1.15], [0.4, 0.99], [0.66, 0.875]]
+	[-0.3, 1.305], [-0.15, 1.27], [0.1, 1.15], [0.4, 0.99], [0.66, 0.86]]   # windscreen base meets the bonnet (was 0.875: a 2 cm step)
 
 # ---------------------------------------------------------------- shape functions
 static func sstep(a: float, b: float, x: float) -> float:
@@ -382,7 +382,7 @@ func _build_mechanicals(mb) -> void:
 		mb.box("engine", Transform3D(hb, Vector3(0.2 * side, 0.6, -1.12)), Vector3(0.18, 0.16, 0.58))
 		mb.box("red", Transform3D(hb, Vector3(0.24 * side, 0.67, -1.12)), Vector3(0.12, 0.04, 0.54))  # valve cover
 	mb.box("alu", Transform3D(I, Vector3(0, 0.71, -1.08)), Vector3(0.3, 0.07, 0.48))                # plenum
-	mb.cylinder("alu", Transform3D(Basis(Vector3.RIGHT, PI / 2), Vector3(0, 0.7, -1.4)), 0.06, 0.06, 0.16, 14)  # throttle body
+	mb.cylinder("alu", Transform3D(Basis(Vector3.RIGHT, PI / 2), Vector3(0, 0.655, -1.4)), 0.055, 0.055, 0.16, 14)  # throttle body (kept under the bonnet: it used to poke through)
 	mb.box("hose", Transform3D(I, Vector3(-0.42, 0.62, -1.48)), Vector3(0.22, 0.14, 0.26))          # air box
 	mb.box("hose", Transform3D(I, Vector3(0.44, 0.58, -1.5)), Vector3(0.2, 0.17, 0.24))             # battery
 	mb.box("red", Transform3D(I, Vector3(0.4, 0.675, -1.46)), Vector3(0.03, 0.02, 0.03))
@@ -742,26 +742,28 @@ func _patch(mb, key: String, fa: float, fb: float, tha: float, thb: float, nf: i
 
 func _build_lights_and_seams(mb) -> void:
 	var D := PI / 180.0
-	# headlights: long swept teardrops running up the front fenders
+	# headlights: swept teardrops on the front corners, below the fender tops
+	# (they used to run right up to the bonnet line, which made the bonnet look
+	# like a narrow strip down the middle)
 	var head_mask := func(f: float, th: float) -> bool:
-		var tf := (f - 1.27) / 0.80
+		var tf := (f - 1.45) / 0.62
 		if tf < 0.0 or tf > 1.0:
 			return false
-		var lo := lerpf(47.0, 9.0, pow(tf, 0.65)) * D
-		var hi := lerpf(56.0, 54.0, tf) * D
+		var lo := lerpf(36.0, 8.0, pow(tf, 0.65)) * D
+		var hi := lerpf(40.0, 41.0, tf) * D
 		if f > 2.03:
 			hi -= (f - 2.03) * 3.0
 		return th > lo and th < hi
-	_patch(mb, "headlight", 1.25, 2.09, 5 * D, 60 * D, 180, 110, head_mask, 0.004)
+	_patch(mb, "headlight", 1.43, 2.09, 5 * D, 44 * D, 150, 90, head_mask, 0.004)
 	# inner black headlight bezel line (thin trim border)
 	var bezel := func(f: float, th: float) -> bool:
-		var tf := (f - 1.27) / 0.80
+		var tf := (f - 1.45) / 0.62
 		if tf < 0.0 or tf > 1.0:
 			return false
-		var lo := lerpf(47.0, 9.0, pow(tf, 0.65)) * D
-		var hi := lerpf(56.0, 54.0, tf) * D
+		var lo := lerpf(36.0, 8.0, pow(tf, 0.65)) * D
+		var hi := lerpf(40.0, 41.0, tf) * D
 		return (th > lo - 1.2 * D and th < hi + 1.2 * D) and not (th > lo and th < hi)
-	_patch(mb, "trim", 1.25, 2.09, 5 * D, 60 * D, 180, 110, bezel, 0.003)
+	_patch(mb, "trim", 1.43, 2.09, 5 * D, 44 * D, 150, 90, bezel, 0.003)
 	# taillights: boomerang shapes wrapping the rear corners
 	var tail_mask := func(f: float, th: float) -> bool:
 		var tf := (-f - 1.70) / 0.45
@@ -788,8 +790,8 @@ func _build_lights_and_seams(mb) -> void:
 		return true
 	_patch(mb, "seam", -0.716, 0.558, -38.4 * D, -37.8 * D, 40, 1, sill, 0.002)
 	# clamshell hood cut lines along the fender tops + across the nose
-	_patch(mb, "seam", 0.70, 2.02, 60.0 * D, 60.6 * D, 60, 1, sill, 0.002)
-	_patch(mb, "seam", 0.70, 0.705, 60.0 * D, 90.0 * D, 1, 16, sill, 0.002)
+	_patch(mb, "seam", 0.70, 2.02, 44.5 * D, 45.1 * D, 60, 1, sill, 0.002)
+	_patch(mb, "seam", 0.70, 0.705, 44.5 * D, 90.0 * D, 1, 16, sill, 0.002)
 	# hatch / bumper line at the rear
 	_patch(mb, "seam", -1.985, -1.98, 0.0 * D, 90.0 * D, 1, 30, sill, 0.002)
 	# fuel door (right rear fender)
@@ -801,12 +803,19 @@ func _build_details(mb) -> void:
 	var D := PI / 180.0
 	# headlight projectors
 	for side in [1.0, -1.0]:
-		for e in [[1.90, 30.0], [1.70, 42.0]]:
+		# set into the lens: only a shallow dome shows (centred on the surface,
+		# half of each ball used to stick out of the headlight)
+		for e in [[1.93, 22.0], [1.80, 30.0]]:
 			var f: float = e[0]
 			var th: float = e[1] * D
 			var p := body_raw(f, th)
-			var lp := L(Vector3(p.x * side, p.y, p.z))
-			mb.ellipsoid("projector", Transform3D(Basis(), lp), Vector3(0.035, 0.03, 0.035), 12, 8)
+			var n := (body_raw(f + 0.003, th) - p).cross(body_raw(f, th + 0.003) - p).normalized()
+			var cen := Vector3(0, bottom_y(f) + (top_y(f) - bottom_y(f)) * 0.42, f)
+			if n.dot(p - cen) < 0.0:
+				n = -n
+			var q := p - n * 0.024
+			var lp := L(Vector3(q.x * side, q.y, q.z))
+			mb.ellipsoid("projector", Transform3D(Basis(), lp), Vector3(0.032, 0.032, 0.032), 12, 8)
 	# side mirrors
 	for side in [1.0, -1.0]:
 		var p := body_raw(0.50, BELT_TH)
@@ -874,13 +883,16 @@ func _build_details(mb) -> void:
 	mb.box("plate", Transform3D(Basis(), L(Vector3(0, 0.33, 2.15))), Vector3(0.32, 0.16, 0.012))
 	mb.box("plate", Transform3D(Basis(), L(Vector3(0, 0.60, -2.168))), Vector3(0.32, 0.16, 0.012))
 	# windscreen wipers
+	# lying on the base of the windscreen, just behind the bonnet's back edge
+	# (they used to float ~3 cm above it, a black bar sticking out)
+	var wy := top_y(0.63) - 0.004
 	for side in [1.0, -1.0]:
-		var a := L(Vector3(0.05 * side, 0.885, 0.64))
-		var b := L(Vector3(0.58 * side - 0.3, 0.9, 0.60))
+		var a := L(Vector3(0.05 * side, wy, 0.635))
+		var b := L(Vector3(0.58 * side - 0.3, wy + 0.008, 0.615))
 		if side < 0:
-			b = L(Vector3(-0.15, 0.9, 0.60))
-			a = L(Vector3(-0.62, 0.885, 0.63))
-		mb.beam("trim", a, b, Vector3.UP, 0.02, 0.015, 0.015, 0.012)
+			b = L(Vector3(-0.15, wy + 0.008, 0.615))
+			a = L(Vector3(-0.62, wy, 0.63))
+		mb.beam("trim", a, b, Vector3.UP, 0.016, 0.012, 0.01, 0.008)
 	# underbody tray
 	mb.box("trim", Transform3D(Basis(), Vector3(0, 0.17, 0)), Vector3(1.3, 0.01, 3.6))
 
@@ -889,7 +901,9 @@ func _build_interior(mb) -> void:
 	mb.box("interior", Transform3D(Basis(), L(Vector3(0, 0.22, -0.25))), Vector3(1.45, 0.02, 2.0))
 	mb.box("interior", Transform3D(Basis(), L(Vector3(0, 0.36, -0.1))), Vector3(0.24, 0.26, 1.2))
 	# dashboard
-	mb.box("interior", Transform3D(Basis(Vector3.RIGHT, -0.15), L(Vector3(0, 0.73, 0.52))), Vector3(1.42, 0.2, 0.42))
+	# (kept inside the windscreen: it used to poke out over the bonnet and past
+	# the A-pillars as a black bar)
+	mb.box("interior", Transform3D(Basis(Vector3.RIGHT, -0.15), L(Vector3(0, 0.72, 0.45))), Vector3(1.26, 0.2, 0.32))
 	mb.box("interior", Transform3D(Basis(), L(Vector3(0, 0.55, 0.45))), Vector3(1.4, 0.2, 0.3))
 	# driver's binnacle (moves with the column on the real car) - driver sits on the left (LHD)
 	var dx := -0.37
@@ -1466,7 +1480,7 @@ void fragment() {
 	}
 	// crumpled metal is faceted: light it by the actual folded faces (sharp
 	// creases catching the light like scrunched foil) instead of smooth normals
-	float crum = smoothstep(0.008, 0.05, dent_amt);
+	float crum = smoothstep(0.03, 0.07, dent_amt);   // (a slight bend stays smooth paint)
 	if (crum > 0.0) {
 		vec3 fn = normalize(cross(dFdx(VERTEX), dFdy(VERTEX)));
 		if (dot(fn, NORMAL) < 0.0) {
@@ -1630,13 +1644,28 @@ func upload_lattice(arr: PackedVector4Array) -> void:
 var wheel_camber := [0.0, 0.0, 0.0, 0.0]
 var wheel_wobble := [0.0, 0.0, 0.0, 0.0]
 
-func set_paint(c: Color) -> void:
+# neon: the paint glows in its own colour (Neon Cache skins)
+func set_paint(c: Color, neon := false) -> void:
 	paint_color = c
-	(mats["paint"] as StandardMaterial3D).albedo_color = c
+	var pm := mats["paint"] as StandardMaterial3D
+	pm.albedo_color = c
+	pm.emission_enabled = neon
+	if neon:
+		# full-strength version of the colour (dark blue glows bright blue), and
+		# enough energy to bloom through the glow effect
+		var m: float = max(c.r, max(c.g, c.b), 0.001)
+		if m < 0.05:
+			# Neon Black: stays black with a faint cold blue-white sheen
+			pm.emission = Color(0.55, 0.6, 1.0)
+			pm.emission_energy_multiplier = 0.25
+		else:
+			pm.emission = Color(c.r / m, c.g / m, c.b / m)
+			pm.emission_energy_multiplier = 1.6
 	# with damage on the body draws with a shader copy of the paint: recolour that too
-	var dm = dent_mats.get(mats["paint"])
+	var dm = dent_mats.get(pm)
 	if dm is ShaderMaterial:
 		dm.set_shader_parameter("albedo", c)
+		_sync_emission(pm, dm)
 
 # wheel i (FL FR RL RR) has come off: hide the tyre + rim on the car (the
 # hub and brake caliper stay) and return a copy of it to throw
