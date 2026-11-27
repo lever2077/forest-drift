@@ -5,6 +5,7 @@ const Profile = preload("res://scripts/profile.gd")
 const Updater = preload("res://scripts/updater.gd")
 const Gfx = preload("res://scripts/gfx.gd")
 const CrateRoll = preload("res://scripts/crate_roll.gd")
+const CarDamage = preload("res://scripts/car_damage.gd")
 
 var car
 var track
@@ -466,6 +467,38 @@ func build_settings(p_envc, p_main) -> void:
 	dmg.focus_mode = Control.FOCUS_NONE
 	dmg.add_theme_font_size_override("font_size", 18)
 	r6.add_child(dmg)
+	# fragility: how easily the car breaks (50% = normal)
+	var r6f := _row(t_car)
+	var frag_pad := Control.new()
+	frag_pad.custom_minimum_size = Vector2(28, 0)
+	r6f.add_child(frag_pad)
+	var frag_l := Label.new()
+	frag_l.text = "Fragility"
+	frag_l.add_theme_font_size_override("font_size", 16)
+	r6f.add_child(frag_l)
+	var frag_slider := HSlider.new()
+	frag_slider.min_value = 0.0
+	frag_slider.max_value = 1.0
+	frag_slider.step = 0.05
+	frag_slider.value = main_node.car_fragility
+	frag_slider.custom_minimum_size = Vector2(220, 30)
+	frag_slider.focus_mode = Control.FOCUS_NONE
+	frag_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	r6f.add_child(frag_slider)
+	var frag_val := Label.new()
+	frag_val.custom_minimum_size = Vector2(130, 0)
+	frag_val.add_theme_font_size_override("font_size", 16)
+	r6f.add_child(frag_val)
+	var frag_text := func(v: float) -> String:
+		var pct := int(round(v * 100.0))
+		if pct == 50:
+			return "50%  (normal)"
+		return "%d%%  (x%.2f)" % [pct, CarDamage.fragility_mult(v)]
+	frag_val.text = frag_text.call(main_node.car_fragility)
+	frag_slider.value_changed.connect(func(v):
+		frag_val.text = frag_text.call(v)
+		main_node.set_car_fragility(v))
+	_note(r6f, "lower = tougher, higher = breaks more easily")
 	# sub-setting: whether the damage also breaks the car mechanically
 	var r7 := _row(t_car)
 	var pad := Control.new()

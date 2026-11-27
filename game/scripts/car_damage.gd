@@ -8,7 +8,7 @@
 #    stiffer than the crumple zones front and back). The body mesh follows the
 #    frame on the GPU (trilinear blend of the points' movement), so the whole
 #    front can fold back, the bonnet buckle, the roof crush.
-#  * Loose parts: bumpers, bonnet, doors, mirrors and the rear wing are cut out of
+#  * Loose parts: bumpers, bonnet, doors and the rear wing are cut out of
 #    the body. Each takes damage from hits near it: first it hangs loose on its
 #    hinge (doors swing, the bonnet flutters, bumpers droop), then it comes off
 #    and tumbles along the ground.
@@ -24,6 +24,13 @@ const NZ := 12
 const LMIN := Vector3(-0.9, 0.15, -2.2)
 const LSTEP := Vector3(0.6, 0.5, 0.4)
 const ITER := 3                  # relaxation passes per physics tick while active
+# Settings > Car > Fragility: multiplies how hard every hit lands on the body,
+# and so the parts, glass, wheels and engine too (1 = normal; main.gd sets it)
+static var fragility := 1.0
+
+# slider 0..1 -> damage multiplier: 0.5 = x1 (normal), 0 = x0.25 (tough), 1 = x4 (fragile)
+static func fragility_mult(slider: float) -> float:
+	return pow(4.0, (clampf(slider, 0.0, 1.0) - 0.5) * 2.0)
 
 var model                       # car_model.gd
 var car                         # car.gd
@@ -136,6 +143,74 @@ func _physics_process(_delta: float) -> void:
 		_upload_lattice()
 	_update_parts(_delta)
 	_update_debris(_delta)
+	_update_rv(_delta)
+
+# ================================================================ rear-view mirror
+# It's glued to the top of the windscreen. Hard knocks shake it (rv_health) and
+# a crushed roof / windscreen frame snaps it off; then it falls about inside the
+# cabin: gravity in the car's own frame (upside down it drops onto the roof
+# lining), bouncing off the cabin's walls, floor and roof.
+const RV_BOX_MIN := Vector3(-0.62, 0.42, -0.35)   # cabin, body local
+const RV_BOX_MAX := Vector3(0.62, 1.16, 0.95)
+var max_throw := 0.0   # fastest a broken part has been thrown off, relative to the car (crash test readout)
+var rv_health := 1.0
+var rv_loose := false
+var rv_pos := Vector3.ZERO
+var rv_vel := Vector3.ZERO
+var rv_ang := Vector3.ZERO
+var rv_prev_v := Vector3.ZERO     # car's velocity last tick (its jolts throw the mirror about)
+
+func _rv_hit(vn: float) -> void:
+	if rv_loose or model.get("rv_mirror") == null or model.rv_mirror == null:
+		return
+	rv_health -= max(vn - 6.0, 0.0) * 0.045
+	if rv_health <= 0.0 or frame_disp_near(model.rv_mount, 0.5) > 0.1:
+		_rv_fall(vn)
+
+func _rv_fall(vn: float) -> void:
+	rv_loose = true
+	rv_pos = model.rv_mirror.position
+	rv_vel = Vector3(randf_range(-1, 1), randf_range(-0.5, 0.5), randf_range(-1, 1)) * (0.6 + vn * 0.08)
+	rv_ang = Vector3(randf_range(-1, 1), randf_range(-1, 1), randf_range(-1, 1)) * (3.0 + vn * 0.3)
+	model.set_rv_mirror_broken(true)
+	if car.crash_audio:
+		car.crash_audio.clank(model.rv_mirror.global_position, 0.3)
+
+func _update_rv(dt: float) -> void:
+	if car == null:
+		return
+	var cv: Vector3 = car.point_velocity(car.global_position)
+	var jolt: Vector3 = (cv - rv_prev_v) / maxf(dt, 1e-4)
+	rv_prev_v = cv
+	if not rv_loose or model.rv_mirror == null:
+		return
+	var mn: Node3D = model.rv_mirror
+	var body_b: Basis = mn.get_parent().global_transform.basis.orthonormalized()
+	# gravity minus the car's own acceleration (a crash throws it forwards), in the car's frame
+	var acc: Vector3 = body_b.inverse() * (Vector3(0, -9.81, 0) - jolt.limit_length(200.0))
+	rv_vel += acc * dt
+	rv_pos += rv_vel * dt
+	for k in 3:
+		if rv_pos[k] < RV_BOX_MIN[k] or rv_pos[k] > RV_BOX_MAX[k]:
+			rv_pos[k] = clampf(rv_pos[k], RV_BOX_MIN[k], RV_BOX_MAX[k])
+			if abs(rv_vel[k]) > 1.5 and car.crash_audio:
+				car.crash_audio.clank(mn.global_position, clampf(abs(rv_vel[k]) / 10.0, 0.05, 0.3))
+			rv_vel[k] = -rv_vel[k] * 0.3
+			# lying on something: friction, and the spin dies down
+			for j in 3:
+				if j != k:
+					rv_vel[j] *= 0.85
+			rv_ang *= 0.7
+	if rv_ang.length() > 0.001:
+		mn.basis = (Basis(rv_ang.normalized(), rv_ang.length() * dt) * mn.basis).orthonormalized()
+	mn.position = rv_pos
+
+func _rv_repair() -> void:
+	rv_health = 1.0
+	rv_loose = false
+	if model.get("rv_mirror") != null and model.rv_mirror:
+		model.rv_mirror.transform = Transform3D(Basis(), model.rv_mount)
+		model.set_rv_mirror_broken(false)
 
 func _relax() -> void:
 	var nb := b_a.size()
@@ -330,7 +405,7 @@ func hit(kind: String, wp: Vector3, push: Vector3, axis: Vector3, vn: float, rad
 	# how easily this car breaks (car_model damage_k: >1 crumples deeper and
 	# loses parts and glass sooner)
 	var dkv = model.get("damage_k")
-	var dk: float = float(dkv) if dkv != null else 1.0
+	var dk: float = (float(dkv) if dkv != null else 1.0) * fragility
 	var inv: Transform3D = model.shell.global_transform.affine_inverse() if model.shell else global_transform.affine_inverse()
 	var lp: Vector3 = inv * wp
 	var lu: Vector3 = (inv.basis * push).normalized()
@@ -353,6 +428,7 @@ func hit(kind: String, wp: Vector3, push: Vector3, axis: Vector3, vn: float, rad
 			crush("plane", lp, Vector3.ZERO, 0.9, lu, depth * dk)
 	_hit_parts(lp, vn * dk)
 	_hit_glass(lp, lu, vn * dk, kind)
+	_rv_hit(vn * dk)
 
 # ======================================================================= split
 # Cut the body shell into the detachable parts and the windows.
@@ -381,8 +457,6 @@ func _classify(key: String, c: Vector3, n: Vector3) -> String:
 		if abs(n.x) > 0.55:
 			return "win_left" if c.x < 0.0 else "win_right"
 		return "win_front" if c.z < 0.5 else "win_rear"
-	if ax > 0.86 and c.z > -0.64 and c.z < -0.34 and c.y > 0.84 and c.y < 1.12:
-		return "mirror_left" if c.x < 0.0 else "mirror_right"
 	if c.z > 1.7 and c.y > 1.0 and ax < 0.76:
 		return "wing"
 	if c.z < -1.72 and c.y < 0.58:
@@ -407,8 +481,6 @@ const PART_DEF := {
 	"bumper_front": [Vector3(0.75, 0.35, -1.95), Vector3.BACK, 1.0, "droop"],
 	"bumper_rear": [Vector3(-0.75, 0.38, 2.05), Vector3.BACK, -1.0, "droop"],
 	"wing": [Vector3(0.48, 1.0, 1.9), Vector3.BACK, 1.0, "droop"],
-	"mirror_left": [Vector3(-0.88, 0.9, -0.5), Vector3.UP, 1.0, "mirror"],
-	"mirror_right": [Vector3(0.88, 0.9, -0.5), Vector3.UP, 1.0, "mirror"],
 	# front wings hang off their rear edge and flap open in the wind
 	"fender_left": [Vector3(-0.82, 0.55, -0.64), Vector3.UP, 1.0, "fender"],
 	"fender_right": [Vector3(0.82, 0.55, -0.64), Vector3.UP, -1.0, "fender"],
@@ -659,11 +731,19 @@ func _detach(name: String, vn: float) -> void:
 	mi.get_parent().remove_child(mi)
 	root.add_child(mi)
 	mi.global_transform = gt
-	var push: Vector3 = gt.origin - car.global_position
-	push.y = 0.0
+	# it's flung off hard: away from the middle of the car, up, and with a
+	# random spread, on top of how fast that spot of the car was moving (a
+	# rolling car slings its parts off the way it's spinning). The harder the
+	# hit, the faster it goes.
+	var cen: Vector3 = gt * mi.mesh.get_aabb().get_center()
+	var push: Vector3 = cen - car.global_position - Vector3.UP * 0.5
 	push = push.normalized() if push.length() > 0.01 else Vector3.UP
-	debris.append({"mi": mi, "vel": car.vel + push * (1.5 + vn * 0.15) + Vector3(0, 1.5 + vn * 0.08, 0),
-		"ang": Vector3(randf_range(-1, 1), randf_range(-1, 1), randf_range(-1, 1)) * (2.0 + vn * 0.3),
+	var hit_v: float = max(vn, float(car.last_hit_v))
+	var kick: float = 4.0 + hit_v * 0.6
+	var spread := Vector3(randf_range(-1, 1), randf_range(-0.3, 1), randf_range(-1, 1)) * kick * 0.35
+	max_throw = max(max_throw, (push * kick + spread + Vector3(0, kick * 0.4, 0)).length())
+	debris.append({"mi": mi, "vel": car.point_velocity(cen) + push * kick + spread + Vector3(0, kick * 0.4, 0),
+		"ang": Vector3(randf_range(-1, 1), randf_range(-1, 1), randf_range(-1, 1)) * (4.0 + hit_v * 0.6),
 		"aabb": mi.mesh.get_aabb(), "sleep": false, "t": 0.0})
 
 # A wheel torn off the car (a copy of its tyre + rim node): it flies off,
@@ -674,6 +754,7 @@ func throw_wheel(node: Node3D, vel: Vector3, r: float) -> void:
 	node.global_transform = gt
 	var ax := gt.basis.y.normalized()
 	var vh := Vector3(vel.x, 0, vel.z)
+	max_throw = max(max_throw, (vel - car.point_velocity(gt.origin)).length())
 	debris.append({"mi": node, "vel": vel, "ang": Vector3.UP.cross(vh) / r + ax * randf_range(-2, 2),
 		"aabb": AABB(Vector3(-r, -0.13, -r), Vector3(2 * r, 0.26, 2 * r)), "sleep": false, "t": 0.0,
 		"wheel_r": r, "rolling": true})
@@ -868,6 +949,7 @@ func _ensure_shards() -> void:
 # ======================================================================= repair
 func repair() -> void:
 	repair_frame()
+	_rv_repair()
 	for name in parts.keys():
 		var p: Dictionary = parts[name]
 		var mi: MeshInstance3D = p["mi"]

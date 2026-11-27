@@ -82,8 +82,10 @@ var g_px := PackedFloat32Array()     # nearest road point (for maps that need it
 var g_pz := PackedFloat32Array()
 
 # terrain extents
-const T_MIN := Vector2(-700, -680)
-const T_MAX := Vector2(700, 720)
+var T_MIN := Vector2(-700, -680)    # terrain area (a map can make it bigger in _init)
+var T_MAX := Vector2(700, 720)
+var terrain_step := 2.5             # terrain mesh spacing (bigger maps use a coarser one)
+var road_gap := PackedByteArray()   # per road sample: 1 = no road drawn here (a jump over a gap)
 
 func build() -> void:
 	hills.seed = 7
@@ -470,6 +472,9 @@ func _build_road_mesh() -> void:
 	var dist_acc := 0.0
 	for i in cnt:
 		var j := (i + 1) % cnt
+		if not road_gap.is_empty() and (road_gap[i] or road_gap[j]):
+			dist_acc += STEP       # over a gap: no road surface
+			continue
 		var a: Vector3 = pts[i]
 		var b: Vector3 = pts[j]
 		var ta: Vector3 = tans[i]
@@ -577,7 +582,7 @@ func surface_h(x: float, z: float) -> float:
 	return hd + (hc - hd) * (1.0 - fx) + (hb - hd) * (1.0 - fz)
 
 func _build_terrain() -> void:
-	var step := 2.5   # was 5 m: dunes and lumps looked blocky
+	var step := terrain_step   # 2.5 m (5 m made dunes and lumps look blocky)
 	var nx := int((T_MAX.x - T_MIN.x) / step) + 1
 	var nz := int((T_MAX.y - T_MIN.y) / step) + 1
 	var verts := PackedVector3Array()

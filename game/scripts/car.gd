@@ -100,6 +100,8 @@ const HULL_PTS := [
 	Vector3(0.0, 1.31, 0.2)]
 const CG_LOCAL := Vector3(0.0, H_CG, 0.0)   # centre of mass above the body origin (road level at rest)
 const MU_BODY := 0.55                       # paint / metal sliding on tarmac
+const AIR_PITCH := 550.0                    # Nm of nose-up (throttle) / nose-down (brake) in the air
+const ROLL_RESIST := 0.2                   # how much a shell contact resists the car rolling over it
 # free rigid-body state (only while `rigid`): orientation, spin, centre of mass
 var rigid := false
 var rb_basis := Basis.IDENTITY
@@ -107,6 +109,9 @@ var rb_w := Vector3.ZERO       # angular velocity, world frame (rad/s)
 var rb_v := Vector3.ZERO       # velocity of the centre of mass
 var rb_cg := Vector3.ZERO      # position of the centre of mass
 var rb_wheels := 0             # wheels touching the ground this step
+var hull_imp := PackedFloat32Array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])   # per shell point: impact speed when it touched down (0 = in the air)
+var last_hit_v := 0.0          # speed of the latest hard hit (fades), how fast broken parts get thrown
+var test_hit_max := 0.0        # dev tests: hardest ground hit that reached the body
 var c0 := [0.0, 0.0, 0.0, 0.0]          # static compression per wheel
 var wheel_comp := [0.0, 0.0, 0.0, 0.0]
 var wheel_load := [0.0, 0.0, 0.0, 0.0]
@@ -333,7 +338,10 @@ func _lose_wheel(i: int) -> void:
 	if node and model.damage:
 		var bas := _body_basis()
 		var out: Vector3 = bas.x * signf((WHEEL_LOCAL[i] as Vector3).x)
-		model.damage.throw_wheel(node, vel * 0.9 + out * randf_range(2.0, 4.0) + Vector3(0, randf_range(1.5, 3.0), 0), WHEEL_R)
+		# torn off by a crash: it's flung away hard, faster the harder the hit
+		var kick: float = 4.0 + last_hit_v * 0.55
+		var pv: Vector3 = point_velocity(node.transform.origin)
+		model.damage.throw_wheel(node, pv + out * kick * randf_range(0.7, 1.2) + Vector3(0, kick * randf_range(0.35, 0.7), 0), WHEEL_R)
 	if crash_audio:
 		crash_audio.clank(global_position, 1.0)
 	if i >= 2:
@@ -366,7 +374,22 @@ func _impact(kind: String, wp: Vector3, push: Vector3, axis: Vector3, vn: float,
 	if not model.damage_enabled:
 		return
 	model.impact(kind, wp, push, axis, vn, radius)
+	last_hit_v = max(last_hit_v, vn)
 	mech_dirty = true
+
+# Share of a ground hit that reaches the body (1 = all of it). Each wheel on the
+# ground takes some (4 down: 40% gets through), and rolling over as you land
+# takes up to another 45% off (spin 1 rad/s = none, 5+ rad/s = all of it).
+func _landing_cushion(wheels_down: int, spin: float) -> float:
+	var k := 1.0 - 0.15 * clampi(wheels_down, 0, 4)
+	k *= 1.0 - 0.45 * clampf((spin - 1.0) / 4.0, 0.0, 1.0)
+	return k
+
+# world velocity of a point on the car (the spin included), for things thrown off it
+func point_velocity(wp: Vector3) -> Vector3:
+	if rigid:
+		return rb_v + rb_w.cross(wp - rb_cg)
+	return Vector3(vel.x, vy, vel.z) + Vector3.UP.cross(wp - global_position) * yaw_rate
 
 func _update_mech(dt: float) -> void:
 	if not model.damage_enabled or model.damage == null or not mech_on:
@@ -486,6 +509,7 @@ func _physics_tick(delta: float) -> void:
 		else:
 			_step(dt)
 			_step_body(dt)
+	last_hit_v = move_toward(last_hit_v, 0.0, 25.0 * delta)
 	_post_step(delta)
 
 func _body_basis() -> Basis:
@@ -506,6 +530,7 @@ func _enter_rigid() -> void:
 	rb_cg = global_position + r_cg
 	rb_v = Vector3(vel.x, vy, vel.z) + rb_w.cross(r_cg)
 	rb_wheels = 0
+	hull_imp.fill(0.0)
 	rigid = true
 
 func _exit_rigid() -> void:
@@ -551,26 +576,45 @@ func _step_rigid(dt: float) -> void:
 	for i in 4:
 		if wheel_off[i]:
 			pts.append((WHEEL_LOCAL[i] as Vector3) + Vector3(0.0, WHEEL_R - 0.165, 0.0))
-	for p in pts:
-		var wp: Vector3 = origin + bas * (p as Vector3)
+	for pi in pts.size():
+		var wp: Vector3 = origin + bas * (pts[pi] as Vector3)
 		var gh: float = track.ground_h(wp.x, wp.z)
 		var pen := gh - wp.y
 		if pen <= 0.0:
+			hull_imp[pi] = 0.0
 			continue
 		var n := _ground_normal(wp.x, wp.z, gh)
 		var r := wp - rb_cg
 		var vp: Vector3 = rb_v + rb_w.cross(r)
 		var vn := vp.dot(n)
 		var pn := pen * n.y
-		# metal on the ground: stiff going in, almost no push back out
-		# (the panels crumple and soak up the energy rather than bouncing)
-		var fn: float = max(160000.0 * pn - 18000.0 * vn, 0.0) if vn <= 0.0 else max(40000.0 * pn - 30000.0 * vn, 0.0)
+		# how hard this corner came down when it first touched (kept while it's down)
+		if hull_imp[pi] == 0.0:
+			hull_imp[pi] = max(-vn, 0.01)
+		# 0 = resting / scraping, 1 = slammed down at 9+ m/s (a fast roll)
+		var hs: float = clampf((hull_imp[pi] - 3.0) / 6.0, 0.0, 1.0)
+		# metal on the ground: stiff going in. A gentle touch barely pushes back
+		# out (the car settles), but a hard hit on a corner or the roof springs
+		# the car back off the ground, so a fast roll hops from corner to corner
+		# instead of rolling smoothly like a ball
+		var fn: float
+		if vn <= 0.0:
+			fn = max(lerpf(160000.0, 220000.0, hs) * pn - lerpf(18000.0, 8000.0, hs) * vn, 0.0)
+		else:
+			fn = max(lerpf(40000.0, 130000.0, hs) * pn - lerpf(30000.0, 2500.0, hs) * vn, 0.0)
 		var vt := vp - n * vn
-		# Coulomb friction; below 2 cm/s it acts as a stiff damper so a resting car grips
-		var ft: Vector3 = -vt / max(vt.length(), 0.02) * MU_BODY * fn
+		# Coulomb friction; below 2 cm/s it acts as a stiff damper so a resting car grips.
+		# A hard hit digs the metal in (gouging, snagging): it grabs harder, so the
+		# corner trips the car over it and the roll turns into a tumble
+		var ft: Vector3 = -vt / max(vt.length(), 0.02) * (MU_BODY + 0.2 * hs) * fn
 		var f: Vector3 = n * fn + ft
 		force += f
 		torque += r.cross(f)
+		# rolling over a corner crumples it and drags it through the ground, which
+		# eats the spin: without this the car body rolls on almost freely, like a
+		# ball. (Linear below 0.5 rad/s so a resting car doesn't jitter.)
+		var w_roll := rb_w - n * rb_w.dot(n)
+		torque -= w_roll / max(w_roll.length(), 0.5) * ROLL_RESIST * fn * r.length()
 		scrape += fn
 		if -vn > hard_hit:
 			hard_hit = -vn
@@ -617,6 +661,13 @@ func _step_rigid(dt: float) -> void:
 	# --- air drag on the body
 	var hv := Vector3(rb_v.x, 0.0, rb_v.z)
 	force -= hv * hv.length() * drag_k
+	# --- in the air: the pedals tilt the car. Throttle spins the wheels up and
+	# the body pitches back the other way (nose up); braking stops them (nose
+	# down). Lets you level the car out for a clean landing.
+	if wheels == 0 and scrape == 0.0:
+		var thr_air := in_throttle if gear != -1 else in_brake
+		var brk_air := in_brake if gear != -1 else in_throttle
+		torque += bas.x * (thr_air - brk_air) * AIR_PITCH
 	# --- integrate: linear, then Euler's equations in the body frame
 	rb_v += force / MASS * dt
 	rb_cg += rb_v * dt
@@ -654,10 +705,16 @@ func _step_rigid(dt: float) -> void:
 	if scrape > 0.0:
 		scrape_level = max(scrape_level, clampf(speed / 12.0, 0.0, 1.0) * clampf(scrape / (MASS * G * 0.3), 0.2, 1.0))
 		_cancel_drift(drift_points > 0.0)
-	if hard_hit > 3.5:
+	# how hard the hit really lands on the body: wheels on the ground take most of
+	# it (tyres and suspension), and landing while rolling turns much of the drop
+	# into spin, so the body glances off instead of slamming flat
+	var w_roll := rb_w - hit_n * rb_w.dot(hit_n)
+	var hit_eff := hard_hit * _landing_cushion(wheels, w_roll.length())
+	test_hit_max = max(test_hit_max, hit_eff)
+	if hit_eff > 3.5:
 		# slamming the roof, a pillar, a corner or a side into the ground
-		_crash_feel(Vector3.ZERO, hard_hit * 0.8, "ground")
-		_impact("ground", hit_pt, hit_n, Vector3.ZERO, hard_hit, 0.0)
+		_crash_feel(Vector3.ZERO, hit_eff * 0.8, "ground")
+		_impact("ground", hit_pt, hit_n, Vector3.ZERO, hit_eff, 0.0)
 	var was_wheels := rb_wheels > 0
 	rb_wheels = wheels
 	grounded = wheels > 0
@@ -756,19 +813,27 @@ func _step_body(dt: float) -> void:
 	for cp in CHASSIS_PTS:
 		var r: Vector3 = bas * (cp as Vector3)
 		var wp := pos + r
-		var pen: float = track.ground_h(wp.x, wp.z) - wp.y
+		var gh0: float = track.ground_h(wp.x, wp.z)
+		var pen: float = gh0 - wp.y
 		if pen > 0.0:
-			var pv: float = vy + omega.cross(r).y
+			# speed into the ground, measured against the ground itself: sliding
+			# down a slope (a jump's landing) at speed isn't a hit, only coming
+			# down faster than the slope falls away is
+			var g_slope_v: float = (track.ground_h(wp.x + vel.x * 0.05, wp.z + vel.z * 0.05) - gh0) / 0.05
+			var pv: float = vy + omega.cross(r).y - g_slope_v
 			# metal on the ground: stiff going in, almost no push back out (it
 			# crunches and stays down, it doesn't bounce)
 			var f: float = max(160000.0 * pen - 18000.0 * pv, 0.0) if pv <= 0.0 else max(40000.0 * pen - 30000.0 * pv, 0.0)
 			fy += f
 			torque += r.cross(Vector3(0, f, 0))
 			scrape += f
-			# slamming the nose, floor or roof into the ground
-			if pv < -3.5:
-				_crash_feel(Vector3.ZERO, -pv * 0.8, "ground")
-				_impact("ground", wp, Vector3.UP, Vector3.ZERO, -pv, 0.0)
+			# slamming the nose, floor or roof into the ground (softened when
+			# the wheels are down and soaking it up, or the car's rolling)
+			var pv_eff: float = -pv * _landing_cushion(n_contact, Vector2(pitch_rate, roll_rate).length())
+			test_hit_max = max(test_hit_max, pv_eff)
+			if pv_eff > 3.5:
+				_crash_feel(Vector3.ZERO, pv_eff * 0.8, "ground")
+				_impact("ground", wp, Vector3.UP, Vector3.ZERO, pv_eff, 0.0)
 	if scrape > 0.0:
 		scrape_level = max(scrape_level, clampf(hs / 12.0, 0.0, 1.0) * clampf(scrape / (MASS * G * 0.3), 0.2, 1.0))
 		# metal sliding on the ground: Coulomb friction (mu ~0.6) against the motion
@@ -1034,7 +1099,10 @@ func shift(up: bool) -> void:
 		gear -= 1
 	shift_timer = 0.12
 
+var test_no_obstacles := false   # dev tests only (--fliptest side rolls): no trees or rails
 func _collide_trees(dt: float) -> void:
+	if test_no_obstacles:
+		return
 	var fwd := Vector3(-sin(yaw), 0.0, -cos(yaw))
 	var pos := global_position
 	var trees: Array = forest.trees_near(pos.x, pos.z)

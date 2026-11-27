@@ -11,21 +11,26 @@ const EnvController = preload("res://scripts/env_controller.gd")
 const Gfx = preload("res://scripts/gfx.gd")
 const BiomeFx = preload("res://scripts/biome_fx.gd")
 const EndlessTrack = preload("res://scripts/endless_track.gd")
+const CarDamage = preload("res://scripts/car_damage.gd")
 const Mountains = preload("res://scripts/mountains.gd")
 const HillTrack = preload("res://scripts/hill_track.gd")
 const CircuitTrack = preload("res://scripts/circuit_track.gd")
+const JumpTrack = preload("res://scripts/jump_track.gd")
+const SpeedTrack = preload("res://scripts/speed_track.gd")
 const Grass = preload("res://scripts/grass.gd")
 const Profile = preload("res://scripts/profile.gd")
 const VrPanel = preload("res://scripts/vr_panel.gd")
 # map index -> name (index order is what's saved; the menu shows them in MENU_ORDER)
-const MAPS := ["Greenwood Circuit", "Endless Road", "Switchback Ridge", "Compass Raceway"]
+const MAPS := ["Greenwood Circuit", "Endless Road", "Switchback Ridge", "Compass Raceway", "Airtime Park", "Canyon Speedway"]
 const MAP_INFO := [
 	"2.5 km forest loop with laps and three jump crests",
 	"a never-ending country road through the forest: gentle bends and rolling hills",
 	"3.7 km mountain pass: stacked hairpins up an open grassy hillside",
 	"a twisting race circuit: esses, hairpins and a long start/finish straight",
+	"a jump park: eight big kickers with long sloped landings straight ahead, most just after a corner",
+	"a 6.6 km flat-out loop with only wide bends, and a top-speed jump over a ravine half way round",
 ]
-const MENU_ORDER := [1, 0, 2, 3]
+const MENU_ORDER := [1, 0, 2, 3, 4, 5]
 static var map_choice := -1
 static var auto_start := false     # set when the menu reloads the world to drive straight away
 static var biome_name := ""         # cosmetic biome picked on the start menu (saved)
@@ -63,6 +68,12 @@ var biome_fx_node
 var car_damage := false     # body panels dent on impacts (Settings panel, saved)
 
 var car_effects := true     # damage can break the engine / wheels / axles (Settings, saved)
+var car_fragility := 0.5    # Settings > Car > Fragility slider, 0..1 (0.5 = normal, saved)
+
+func set_car_fragility(v: float) -> void:
+	car_fragility = clampf(v, 0.0, 1.0)
+	CarDamage.fragility = CarDamage.fragility_mult(car_fragility)
+	save_settings()
 
 func set_car_damage(on: bool) -> void:
 	car_damage = on
@@ -418,6 +429,10 @@ func _ready() -> void:
 		map_choice = 0
 	if "--hill" in OS.get_cmdline_user_args():
 		map_choice = 2
+	if "--speedway" in OS.get_cmdline_user_args():
+		map_choice = 5
+	if "--jumps" in OS.get_cmdline_user_args():
+		map_choice = 4
 	if "--circuit" in OS.get_cmdline_user_args():
 		map_choice = 3
 	map_choice = clampi(map_choice, 0, MAPS.size() - 1)
@@ -429,7 +444,7 @@ func _ready() -> void:
 	if not biome_name in Biome.LIST:   # e.g. the removed Stadium
 		biome_name = "Forest"
 	var args := OS.get_cmdline_user_args()
-	var test_mode := shot_dir != "" or "--drivetest" in args or "--bottest" in args or "--edgetest" in args or "--vrgrabtest" in args
+	var test_mode := shot_dir != "" or "--drivetest" in args or "--bottest" in args or "--edgetest" in args or "--vrgrabtest" in args or "--fliptest" in args
 	# start screen: a fresh launch (or Esc while driving) shows the blurred forest
 	# and the map list; picking a map rebuilds the scene straight into that map
 	if not test_mode and not auto_start:
@@ -437,7 +452,7 @@ func _ready() -> void:
 		return
 	auto_start = false
 	started = true
-	track = [Track, EndlessTrack, HillTrack, CircuitTrack][map_choice].new()
+	track = [Track, EndlessTrack, HillTrack, CircuitTrack, JumpTrack, SpeedTrack][map_choice].new()
 	track.name = "Track"
 	track.biome = Biome.get_biome(biome_for(map_choice, biome_name))
 	add_child(track)
@@ -598,6 +613,8 @@ func _crash_test() -> void:
 			fmax = max(fmax, (dm.pos[i] - dm.rest[i]).length())
 	print("CRASH %.0f km/h: frame moved up to %.2f m, dents %d, engine %.2f temp %.2f wheels %s axles %s" % [kmh, fmax, car.model.dents.size(), car.engine_dmg, car.engine_temp, str(car.wheel_dmg), str(car.axle_broken)])
 	print("  parts: " + ", ".join(pm))
+	if car.model.damage:
+		print("  thrown parts: fastest %.0f km/h relative to the car; rear-view mirror %s" % [car.model.damage.max_throw * 3.6, "fell off" if car.model.damage.rv_loose else "still on"])
 	if car.model.damage and "--verbose" in OS.get_cmdline_user_args():
 		# how far each slice of the crumple frame moved / bent, front to back
 		var dm3 = car.model.damage
@@ -906,6 +923,11 @@ func _flip_test() -> void:
 		["roof, sliding+spin", 0.0, PI, 50.0, 2.5, 0.0],
 		["rollover at 80", 0.0, 0.0, 80.0, 0.0, 7.0],
 		["roof drop from 3 m", 0.0, PI, 0.0, 0.0, 0.0],
+		["wheels drop from 3 m", 0.0, 0.0, 0.0, 0.0, 0.0],
+		["wheels drop 3 m at 80", 0.0, 0.0, 80.0, 0.0, 0.0],
+		# sliding sideways and tripping over into a roll (7th: sideways km/h)
+		["side-trip roll 70", 0.0, -0.5, 0.0, 0.0, -6.0, 70.0],
+		["side-trip roll 110", 0.0, -0.5, 0.0, 0.0, -8.0, 110.0],
 	]
 	# mid-air tumble: with nothing touching, angular momentum must stay the same
 	# (a real spinning body), however the car turns over
@@ -925,7 +947,13 @@ func _flip_test() -> void:
 		var Lk: Vector3 = car.rb_basis * ((car.rb_basis.transposed() * car.rb_w) * Vector3(car.I_PITCH, car.IZ, car.I_ROLL))
 		Lmax = max(Lmax, (Lk - L0).length())
 	print("AIR tumble: rigid=%s, angular momentum %.0f, drifted at most %.2f%% over 1 s" % [car.rigid, L0.length(), Lmax / L0.length() * 100.0])
+	var only := ""   # --flipcase=<text>: just the cases whose name contains it
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--flipcase="):
+			only = a.substr(11)
 	for c in cases:
+		if only != "" and not String(c[0]).contains(only):
+			continue
 		await get_tree().create_timer(0.5).timeout
 		car.reset_on_track()
 		var fw := Vector3(-sin(car.yaw), 0, -cos(car.yaw))
@@ -935,8 +963,12 @@ func _flip_test() -> void:
 		car.roll_rate = c[5]
 		car.vy = 0.0
 		car.vel = fw * float(c[3]) / 3.6
+		car.test_no_obstacles = c.size() > 6   # rolls run off the road: measure just the ground
+		if c.size() > 6:   # sliding sideways, towards the car's right
+			car.vel += Vector3(cos(car.yaw), 0, -sin(car.yaw)) * float(c[6]) / 3.6
 		car.yaw_rate = c[4]
 		car.global_position.y += 3.0 if String(c[0]).contains("drop") else 1.2
+		car.test_hit_max = 0.0
 		car.in_throttle = 0.0
 		var t := 0.0
 		var log_t := 0.0
@@ -947,6 +979,11 @@ func _flip_test() -> void:
 		var pr0 := Vector2.ZERO
 		var q0 := Quaternion.IDENTITY
 		var p0 := Vector3.ZERO
+		var hops := 0
+		var hop_max := 0.0
+		var in_air := false
+		var half_rolls := 0
+		var up_sign := 1.0
 		while t < 6.0:
 			await get_tree().physics_frame
 			var dt := get_physics_process_delta_time()
@@ -963,6 +1000,17 @@ func _flip_test() -> void:
 			for wl in car.WHEEL_LOCAL:
 				var wp2: Vector3 = car.global_position + b * ((wl as Vector3) + Vector3(0, -car.c0[0], 0))
 				low = min(low, wp2.y - track.ground_h(wp2.x, wp2.z))
+			# hops in the first 3 s: times the whole car leaves the ground (> 5 cm), and the highest
+			if signf(b.y.y) != up_sign and abs(b.y.y) > 0.3:
+				up_sign = signf(b.y.y)
+				half_rolls += 1
+			if t <= 3.0 and t > 0.4:
+				if low > 0.05 and not in_air:
+					in_air = true
+					hops += 1
+				elif low < 0.01:
+					in_air = false
+				hop_max = max(hop_max, low)
 			if t > 3.0:
 				# true rotation (angle between orientations) and distance moved since 3 s
 				if pr0 == Vector2.ZERO:
@@ -976,7 +1024,7 @@ func _flip_test() -> void:
 			if log_t >= 0.5 and "--verbose" in OS.get_cmdline_user_args():
 				log_t = 0.0
 				print("   t=%.1f gap=%.2f pitch=%.0f roll=%.0f yawrate=%.2f v=%.1f vy=%.2f grounded=%s" % [t, low, rad_to_deg(car.pitch), rad_to_deg(car.roll), car.yaw_rate, car.speed * 3.6, car.vy, car.grounded])
-		print("FLIP %-20s after 3 s: max gap %.2f m, moved %.2f m, rotated %.1f deg, speed %.1f km/h, up.y=%.2f" % [c[0], max_gap_late, yaw_late, rad_to_deg(ang_late), car.speed * 3.6, car._body_basis().y.y])
+		print("FLIP %-20s after 3 s: max gap %.2f m, moved %.2f m, rotated %.1f deg, speed %.1f km/h, up.y=%.2f | first 3 s: %d hops, highest %.2f m | %d half-rolls | hardest body hit %.1f m/s" % [c[0], max_gap_late, yaw_late, rad_to_deg(ang_late), car.speed * 3.6, car._body_basis().y.y, hops, hop_max, half_rolls, car.test_hit_max])
 	get_tree().quit()
 
 # drives off the road edge and back on at a given speed and logs body motion
@@ -1052,10 +1100,32 @@ func _bot_test() -> void:
 	# --fps: short timed run with vsync off, prints the average frame rate
 	var fps_mode := "--fps" in OS.get_cmdline_user_args()
 	var lane := 0.0
+	var bot_kmh := 0.0
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--lane="):
 			lane = float(a.substr(7))
+		elif a.begins_with("--botkmh="):
+			bot_kmh = float(a.substr(9))
+	# Airtime Park: where each jump's landing touched down
+	if track.get("jumps") != null and not track.jumps.is_empty():
+		car.air_landed.connect(func(at, _p):
+			var best := ""
+			for j in track.jumps:
+				var k: int = (car.track_idx - int(j["idx"]) + n) % n
+				var sz: int = j["size"]
+				if k * track.STEP <= track.jump_len(sz) + 60.0:
+					var lip: float = track.lip_dist(sz)
+					var steep_end: float = track.slope_end(sz)
+					best = "  LANDING size %d: %.0f m past the lip (slope runs to %.0f m) after %.2fs at %.0f km/h" % [
+						sz, k * track.STEP - lip, steep_end - lip, at, car.speed * 3.6]
+			# the hardest hit on the body in the 0.7 s after touching down
+			car.test_hit_max = 0.0
+			if best != "":
+				get_tree().create_timer(0.7).timeout.connect(func(): print(best + ", hardest body hit %.1f m/s" % car.test_hit_max)))
 	var t_end := 25.0 if fps_mode else 120.0
+	for a in OS.get_cmdline_user_args():   # --bottime=N: drive for N seconds
+		if a.begins_with("--bottime="):
+			t_end = float(a.substr(10))
 	var f0 := 0
 	var w0 := 0
 	if fps_mode:
@@ -1104,6 +1174,15 @@ func _bot_test() -> void:
 		car.in_steer = clampf(err * 2.5, -1.0, 1.0)
 		car.in_throttle = 0.8
 		car.in_brake = 0.0
+		if bot_kmh > 0.0:
+			# --botkmh=N: stay under N km/h and slow for the corners coming up
+			var cap := bot_kmh / 3.6
+			for k in range(4, 40, 3):
+				var cv: float = abs(track.curv[(car.track_idx + k) % n])
+				if cv > 0.001:
+					cap = min(cap, sqrt(7.0 / cv) + k * track.STEP * 0.12)
+			car.in_throttle = 0.8 if car.speed < cap - 1.0 else (0.25 if car.speed < cap else 0.0)
+			car.in_brake = clampf((car.speed - cap) / 4.0, 0.0, 1.0)
 		car.in_handbrake = 0.0
 		car.in_analog = false
 		dist += car.speed * dt
@@ -1450,6 +1529,8 @@ func _load_settings() -> void:
 		biome_fx = clampf(float(cf.get_value("world", "biome_fx", 1.0)), 0.0, 1.0)
 		car_damage = bool(cf.get_value("world", "car_damage", false))
 		car_effects = bool(cf.get_value("world", "car_effects", true))
+		car_fragility = clampf(float(cf.get_value("world", "car_fragility", 0.5)), 0.0, 1.0)
+		CarDamage.fragility = CarDamage.fragility_mult(car_fragility)
 		dmg_engine = bool(cf.get_value("world", "dmg_engine", true))
 		dmg_wheels = bool(cf.get_value("world", "dmg_wheels", true))
 		wheels_fall = bool(cf.get_value("world", "wheels_fall", true))
@@ -1482,6 +1563,7 @@ func save_settings() -> void:
 	cf.set_value("world", "baked", Gfx.baked)
 	cf.set_value("world", "car_damage", car_damage)
 	cf.set_value("world", "car_effects", car_effects)
+	cf.set_value("world", "car_fragility", car_fragility)
 	cf.set_value("world", "dmg_engine", dmg_engine)
 	cf.set_value("world", "dmg_wheels", dmg_wheels)
 	cf.set_value("world", "wheels_fall", wheels_fall)

@@ -448,18 +448,20 @@ func build() -> void:
 const MIRROR_EYE := Vector3(-0.37, 1.07, 0.36)   # driver's eyes (body local)
 var mirrors: Array = []    # {"vp": SubViewport, "cam": Camera3D, "xf": Transform3D (body local)}
 var mirrors_on := false
+# the rear-view mirror (stem, frame and glass) hangs off this node, which sits
+# where it's glued to the windscreen: car_damage.gd knocks it loose in a crash
+# and it drops into the cabin (rv_mount = its body-local spot when fitted)
+var rv_mirror: Node3D
+var rv_mount := Vector3.ZERO
 
 func _build_mirrors() -> void:
-	# side mirrors: glass on the back of each housing (same spot as _build_details)
-	for side in [1.0, -1.0]:
-		var p := body_raw(0.50, BELT_TH)
-		var housing := L(Vector3(p.x * side, p.y, p.z)) + Vector3(0.10 * side, 0.08, 0.02)
-		var glass := housing + Vector3(-0.022 * side, 0, 0.072)   # over the chrome back of the housing
-		# looking back along the car's flank, a little outwards
-		var view := Vector3(0.14 * side, -0.03, 1.0).normalized()
-		_add_mirror(glass, view, Vector2(0.14, 0.07), Vector2i(360, 180), 17.0)
-	# rear-view mirror hanging from the top of the windscreen
+	# rear-view mirror hanging from the top of the windscreen (the only mirror)
 	var rv := L(Vector3(0.0, 1.165, -0.08))
+	rv_mount = rv
+	rv_mirror = Node3D.new()
+	rv_mirror.name = "RearViewMirror"
+	rv_mirror.position = rv
+	body.add_child(rv_mirror)
 	var stem := MeshInstance3D.new()
 	var sm := CylinderMesh.new()
 	sm.top_radius = 0.008
@@ -467,11 +469,19 @@ func _build_mirrors() -> void:
 	sm.height = 0.07
 	stem.mesh = sm
 	stem.material_override = mats["interior"]
-	stem.position = rv + Vector3(0, 0.05, -0.015)
-	body.add_child(stem)
-	_add_mirror(rv, Vector3(0.0, -0.04, 1.0).normalized(), Vector2(0.25, 0.065), Vector2i(560, 146), 11.0, true)
+	stem.position = Vector3(0, 0.05, -0.015)
+	rv_mirror.add_child(stem)
+	_add_mirror(rv, Vector3(0.0, -0.04, 1.0).normalized(), Vector2(0.25, 0.065), Vector2i(560, 146), 11.0, true, rv_mirror)
 
-func _add_mirror(pos: Vector3, view: Vector3, glass_size: Vector2, res: Vector2i, fov_deg: float, framed := false) -> void:
+# the rear-view mirror has fallen off (stop drawing its view) or been put back
+func set_rv_mirror_broken(broken: bool) -> void:
+	for m in mirrors:
+		if m.get("node") == rv_mirror:
+			m["broken"] = broken
+			(m["vp"] as SubViewport).render_target_update_mode = SubViewport.UPDATE_DISABLED if broken \
+				else (SubViewport.UPDATE_ALWAYS if mirrors_on else SubViewport.UPDATE_ONCE)
+
+func _add_mirror(pos: Vector3, view: Vector3, glass_size: Vector2, res: Vector2i, fov_deg: float, framed := false, holder: Node3D = null) -> void:
 	# the glass faces halfway between the driver's eyes and the view behind
 	var to_eye := (MIRROR_EYE - pos).normalized()
 	var n := (to_eye + view).normalized()
@@ -507,17 +517,20 @@ func _add_mirror(pos: Vector3, view: Vector3, glass_size: Vector2, res: Vector2i
 	glass.material_override = gm
 	glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	glass.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
-	glass.transform = Transform3D(gb, pos + n * 0.002)
-	body.add_child(glass)
+	# pieces go on the holder (placed relative to it) or straight on the body
+	var parent: Node3D = holder if holder else body
+	var off: Vector3 = holder.position if holder else Vector3.ZERO
+	glass.transform = Transform3D(gb, pos + n * 0.002 - off)
+	parent.add_child(glass)
 	if framed:
 		var frame := MeshInstance3D.new()
 		var fm := BoxMesh.new()
 		fm.size = Vector3(glass_size.x + 0.02, glass_size.y + 0.02, 0.025)
 		frame.mesh = fm
 		frame.material_override = mats["interior"]
-		frame.transform = Transform3D(gb, pos - n * 0.013)
-		body.add_child(frame)
-	mirrors.append({"vp": vp, "cam": cam, "xf": xf})
+		frame.transform = Transform3D(gb, pos - n * 0.013 - off)
+		parent.add_child(frame)
+	mirrors.append({"vp": vp, "cam": cam, "xf": xf, "node": holder, "broken": false})
 	_place_mirror_cam(mirrors[-1])
 
 func _place_mirror_cam(m: Dictionary) -> void:
@@ -528,6 +541,8 @@ func _place_mirror_cam(m: Dictionary) -> void:
 func set_mirrors_active(on: bool) -> void:
 	mirrors_on = on
 	for m in mirrors:
+		if m.get("broken", false):
+			continue
 		_place_mirror_cam(m)
 		(m["vp"] as SubViewport).render_target_update_mode = SubViewport.UPDATE_ALWAYS if on else SubViewport.UPDATE_ONCE
 
@@ -816,15 +831,7 @@ func _build_details(mb) -> void:
 			var q := p - n * 0.024
 			var lp := L(Vector3(q.x * side, q.y, q.z))
 			mb.ellipsoid("projector", Transform3D(Basis(), lp), Vector3(0.032, 0.032, 0.032), 12, 8)
-	# side mirrors
-	for side in [1.0, -1.0]:
-		var p := body_raw(0.50, BELT_TH)
-		var base := L(Vector3(p.x * side, p.y, p.z))
-		var housing := base + Vector3(0.10 * side, 0.08, 0.02)
-		mb.beam("paint", base + Vector3(-0.02 * side, 0.0, 0), housing, Vector3.UP, 0.05, 0.04, 0.03, 0.03)
-		var hb := Basis(Vector3.UP, -0.12 * side)
-		mb.ellipsoid("paint", Transform3D(hb, housing), Vector3(0.095, 0.055, 0.06), 16, 10)
-		mb.ellipsoid("chrome", Transform3D(hb, housing + Vector3(0, 0, 0.032)), Vector3(0.085, 0.046, 0.032), 16, 10)
+	# (no side mirrors: the only mirror is the rear-view one inside, _build_mirrors)
 	# vertical door handles
 	for side in [1.0, -1.0]:
 		var p := body_raw(-0.52, 0.18)
